@@ -10,6 +10,12 @@ export const useScreenCapture = ({ shareSystemAudio }: UseScreenCaptureProps) =>
   const isSharing = !!stream;
 
   const startScreenCapture = useCallback(async () => {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+      const errorMessage = "A funcionalidade de captura de tela não é suportada neste navegador ou o aplicativo não está sendo executado em um contexto seguro (HTTPS).";
+      console.error(errorMessage);
+      throw new Error(errorMessage);
+    }
+
     try {
       const mediaStream = await navigator.mediaDevices.getDisplayMedia({
         video: { cursor: 'always' } as MediaTrackConstraints,
