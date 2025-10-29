@@ -1,0 +1,8 @@
+{
+  "name": "Visual Voice Assistant",
+  "description": "An AI assistant that can see your screen and respond to your voice or text commands, helping you with tasks and answering questions about what's on your display.",
+  "requestFramePermissions": [
+    "microphone",
+    "display-capture"
+  ]
+}
