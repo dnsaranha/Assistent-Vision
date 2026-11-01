@@ -38,7 +38,6 @@ const App: React.FC = () => {
       const savedSettings = localStorage.getItem('visualAssistantSettings');
       if (savedSettings) {
         const loaded = JSON.parse(savedSettings);
-        // Ensure defaults are applied if saved settings are missing new keys
         setSettings(prev => ({
             ...prev, 
             ...loaded,
@@ -49,6 +48,10 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("Failed to load settings from localStorage", e);
     }
+  }, []);
+  
+  const handleApiKeyError = useCallback(() => {
+    setError("Sua chave de API parece ser inválida ou não está configurada.");
   }, []);
 
   const handleSettingsChange = (newSettings: Settings) => {
@@ -61,7 +64,19 @@ const App: React.FC = () => {
   };
 
 
-  const { stream, isSharing, startScreenCapture, stopScreenCapture, captureFrame } = useScreenCapture({ 
+  const { 
+    stream, 
+    isSharing, 
+    screenMode,
+    isNativeSupported,
+    activeDemo,
+    virtualCanvasRef,
+    startScreenCapture, 
+    stopScreenCapture, 
+    setCustomImage,
+    selectDemo,
+    captureFrame 
+  } = useScreenCapture({ 
     shareSystemAudio: settings.shareSystemAudio 
   });
   
@@ -82,7 +97,32 @@ const App: React.FC = () => {
     voiceModel: settings.voiceModel,
     systemAudioTrack,
     systemInstruction: settings.liveSystemInstruction,
+    onApiKeyError: handleApiKeyError,
   });
+
+  const handleUploadImage = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      if (e.target?.result) {
+        setCustomImage(e.target.result as string);
+        setAnnotations([]);
+        setVisualGuides([]);
+      }
+    };
+    reader.readAsDataURL(file);
+  }, [setCustomImage]);
+
+  const handlePasteImage = useCallback((dataUrl: string) => {
+    setCustomImage(dataUrl);
+    setAnnotations([]);
+    setVisualGuides([]);
+  }, [setCustomImage]);
+
+  const handleSelectDemo = useCallback((demoId: string) => {
+    selectDemo(demoId);
+    setAnnotations([]);
+    setVisualGuides([]);
+  }, [selectDemo]);
 
   const handleNewMessage = useCallback(async (prompt: string) => {
     if (!prompt || isLoading || isLive) return;
@@ -100,7 +140,7 @@ const App: React.FC = () => {
       try {
         imageBase64 = await captureFrame();
       } catch (err) {
-        setError('Could not capture screen frame.');
+        setError('Não foi possível capturar o quadro da tela.');
         setIsLoading(false);
         return;
       }
@@ -116,13 +156,17 @@ const App: React.FC = () => {
         setVisualGuides(response.visualGuides);
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setError(`Failed to get response from Gemini: ${errorMessage}`);
-      setMessages((prev) => [...prev, { role: Role.ASSISTANT, text: `Sorry, I encountered an error: ${errorMessage}` }]);
+      const errorMessage = err instanceof Error ? err.message : 'Um erro desconhecido ocorreu.';
+      if (errorMessage.includes("Requested entity was not found.") || errorMessage.includes("API key not valid")) {
+        handleApiKeyError();
+      } else {
+        setError(`Falha ao obter resposta do Gemini: ${errorMessage}`);
+        setMessages((prev) => [...prev, { role: Role.ASSISTANT, text: `Desculpe, encontrei um erro: ${errorMessage}` }]);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, isSharing, captureFrame, isLive, settings.systemInstruction, messages]);
+  }, [isLoading, isSharing, captureFrame, isLive, settings.systemInstruction, messages, handleApiKeyError]);
 
   const handleToggleScreenSharing = useCallback(async () => {
     if (isSharing) {
@@ -134,14 +178,16 @@ const App: React.FC = () => {
         stopConversation();
       }
       try {
+        setError(null);
         await startScreenCapture();
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'NotAllowedError') {
-          setError("A permissão para compartilhar a tela foi negada. Clique no botão de tela e escolha 'Permitir' para continuar.");
+        const errorMessage = err instanceof Error ? err.message : '';
+        if (errorMessage === "PERMISSION_DENIED") {
+          setError("O compartilhamento de tela foi cancelado. Você pode tentar novamente ou enviar um print/imagem.");
         } else {
-          const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-          setError(`Erro ao iniciar compartilhamento de tela: ${errorMessage}`);
-          console.error(err);
+          // If native sharing fails for any reason, smoothly start virtual screen mode
+          console.warn("Screen sharing failed, falling back to virtual screen:", err);
+          await startScreenCapture('virtual');
         }
       }
     }
@@ -154,13 +200,10 @@ const App: React.FC = () => {
         setMessages(prev => [...prev, ...liveMessages]);
       }
     } else {
-        if(isSharing) {
-            setTimeout(() => startConversation(), 250);
-        } else {
-            startConversation();
-        }
+      setError(null);
+      startConversation();
     }
-  }, [isLive, stopConversation, startConversation, liveMessages, isSharing]);
+  }, [isLive, stopConversation, startConversation, liveMessages]);
   
   const downloadTextFile = (content: string, filename: string) => {
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8;' });
@@ -192,15 +235,19 @@ const App: React.FC = () => {
       downloadTextFile(summary, `resumo-reuniao-${timestamp}.md`);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setError(`Falha ao gerar o resumo: ${errorMessage}`);
+      if (errorMessage.includes("Requested entity was not found.") || errorMessage.includes("API key not valid")) {
+         handleApiKeyError();
+      } else {
+        setError(`Falha ao gerar o resumo: ${errorMessage}`);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, isLive, messages, isSharing, captureFrame]);
+  }, [isLoading, isLive, messages, isSharing, captureFrame, handleApiKeyError]);
 
   useEffect(() => {
     if (error) {
-        const timer = setTimeout(() => setError(null), 5000);
+        const timer = setTimeout(() => setError(null), 8000);
         return () => clearTimeout(timer);
     }
   }, [error]);
@@ -225,6 +272,15 @@ const App: React.FC = () => {
                 isSharing={isSharing} 
                 annotations={annotations}
                 visualGuides={visualGuides} 
+                screenMode={screenMode}
+                activeDemo={activeDemo}
+                isNativeSupported={isNativeSupported}
+                onSelectDemo={handleSelectDemo}
+                onUploadImage={handleUploadImage}
+                onPasteImage={handlePasteImage}
+                onStartScreenShare={handleToggleScreenSharing}
+                onStopScreenShare={handleToggleScreenSharing}
+                virtualCanvasRef={virtualCanvasRef}
               />
             </div>
             <div className="w-full h-2/3 md:h-full md:w-2/5 flex flex-col">
@@ -242,7 +298,12 @@ const App: React.FC = () => {
                 onGenerateSummary={handleGenerateSummary}
                 hasConversation={messages.length > 1}
               />
-              {error && <div className="p-4 text-red-400 bg-red-900/50 text-center text-sm">{error}</div>}
+              {error && (
+                <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-red-500/90 text-white text-sm shadow-xl backdrop-blur-sm border border-red-400 flex items-center gap-2 animate-bounce-short">
+                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                   {error}
+                </div>
+              )}
             </div>
           </main>
         </div>

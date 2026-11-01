@@ -1,16 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-// Fix: Removed `LiveSession` as it is not an exported member of `@google/genai`.
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 import { Message, Role } from '../types';
 import { decode, decodeAudioData } from '../utils/audioUtils';
 import { useAudioCues } from './useAudioCues';
 
-const API_KEY = process.env.API_KEY;
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable is not set.");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+const getApiKey = () => process.env.API_KEY || process.env.GEMINI_API_KEY || '';
 
 function encode(bytes: Uint8Array): string {
   let binary = '';
@@ -45,15 +39,15 @@ interface UseLiveConversationProps {
   voiceModel: string;
   systemAudioTrack?: MediaStreamTrack;
   systemInstruction: string;
+  onApiKeyError: () => void;
 }
 
-export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensitivity, audioOutputDeviceId, voiceModel, systemAudioTrack, systemInstruction }: UseLiveConversationProps) => {
+export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensitivity, audioOutputDeviceId, voiceModel, systemAudioTrack, systemInstruction, onApiKeyError }: UseLiveConversationProps) => {
   const [isLive, setIsLive] = useState(false);
   const [micVolume, setMicVolume] = useState(0);
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
 
-  // Fix: Replaced `LiveSession` with `ReturnType<typeof ai.live.connect>` to infer the session promise type correctly.
-  const sessionPromiseRef = useRef<ReturnType<typeof ai.live.connect> | null>(null);
+  const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -108,7 +102,15 @@ export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensi
         outputAudioContextRef.current?.close();
     }
     
-    sessionPromiseRef.current?.then(session => session.close()).catch(console.error);
+    if (sessionPromiseRef.current) {
+      sessionPromiseRef.current.then(session => {
+        try {
+          session.close();
+        } catch (e) {
+          console.debug('Session already closed or error closing:', e);
+        }
+      }).catch(() => {});
+    }
 
     setIsLive(false);
     setMicVolume(0);
@@ -171,6 +173,7 @@ export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensi
 
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         const visualize = () => {
+            if (!analyserRef.current) return;
             analyser.getByteFrequencyData(dataArray);
             const sum = dataArray.reduce((a, b) => a + b, 0);
             const avg = sum / dataArray.length;
@@ -180,8 +183,19 @@ export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensi
         visualize();
 
         setIsLive(true);
-        sessionPromiseRef.current = ai.live.connect({
-            model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+
+        const apiKey = getApiKey();
+        if (!apiKey) {
+            onApiKeyError();
+            cleanup();
+            return;
+        }
+
+        const ai = new GoogleGenAI({ apiKey });
+
+        const sessionPromise = ai.live.connect({
+            // Updated to the latest stable preview version to fix backend cancellation issues
+            model: 'gemini-2.5-flash-native-audio-preview-12-2025',
             config: {
                 responseModalities: [Modality.AUDIO],
                 inputAudioTranscription: {},
@@ -196,15 +210,19 @@ export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensi
                     scriptProcessor.onaudioprocess = (event) => {
                         const inputData = event.inputBuffer.getChannelData(0);
                         const pcmBlob = createBlob(inputData);
-                        sessionPromiseRef.current?.then(session => session.sendRealtimeInput({ media: pcmBlob }));
+                        sessionPromise.then(session => {
+                          if (session) session.sendRealtimeInput({ media: pcmBlob });
+                        }).catch(() => {});
                     };
                     if (isSharing) {
                         frameIntervalRef.current = window.setInterval(async () => {
                             try {
                                 const base64Data = await captureFrame();
-                                sessionPromiseRef.current?.then(session => session.sendRealtimeInput({
+                                sessionPromise.then(session => {
+                                  if (session) session.sendRealtimeInput({
                                     media: { data: base64Data, mimeType: 'image/jpeg' }
-                                }));
+                                  });
+                                }).catch(() => {});
                             } catch (error) {
                                 console.error("Could not send frame:", error);
                             }
@@ -241,7 +259,9 @@ export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensi
                     
                     const interrupted = message.serverContent?.interrupted;
                     if (interrupted) {
-                        playingSourcesRef.current.forEach(source => source.stop());
+                        playingSourcesRef.current.forEach(source => {
+                          try { source.stop(); } catch(e) {}
+                        });
                         playingSourcesRef.current.clear();
                         nextAudioStartTime.current = 0;
                     }
@@ -274,15 +294,38 @@ export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensi
                         currentOutputRef.current = '';
                     }
                 },
-                onclose: () => {
+                onclose: (e) => {
+                    console.debug('Live session closed:', e);
                     cleanup();
                 },
                 onerror: (e) => {
-                    console.error("Live session error:", e);
-                    onError("Live session error. Please try again.");
+                    console.error("Live session error event:", e);
+                    const error = (e as any).error || e;
+                    const errorMessage = error.message || 'An unknown network error occurred.';
+                    
+                    if (errorMessage.includes("Requested entity was not found.") || errorMessage.includes("API key not valid")) {
+                        onApiKeyError();
+                    } else if (errorMessage.includes("Thread was cancelled")) {
+                        onError("Conexão interrompida pelo servidor. Tente novamente em instantes.");
+                    } else {
+                        onError(`Erro na sessão ao vivo: ${errorMessage}`);
+                    }
                     cleanup();
                 }
             }
+        });
+
+        sessionPromiseRef.current = sessionPromise;
+
+        sessionPromise.catch((e: Error) => {
+            const errorMessage = e.message || 'An unknown connection error occurred.';
+            console.error("Live session connection failed:", e);
+            if (errorMessage.includes("Requested entity was not found.") || errorMessage.includes("API key not valid")) {
+                onApiKeyError();
+            } else {
+                onError(`Falha ao conectar à sessão ao vivo: ${errorMessage}`);
+            }
+            cleanup();
         });
 
     } catch (e) {
@@ -290,11 +333,11 @@ export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensi
       if (e instanceof DOMException && e.name === 'NotAllowedError') {
           onError("A permissão para usar o microfone foi negada. Por favor, permita o acesso ao microfone para usar a conversa por voz.");
       } else {
-          onError("Não foi possível acessar o microfone.");
+          onError("Não foi possível acessar o microfone ou configurar o áudio.");
       }
       cleanup();
     }
-  }, [isLive, playStartSound, cleanup, isSharing, captureFrame, onError, audioOutputDeviceId, micSensitivity, voiceModel, systemAudioTrack, systemInstruction]);
+  }, [isLive, playStartSound, cleanup, isSharing, captureFrame, onError, audioOutputDeviceId, micSensitivity, voiceModel, systemAudioTrack, systemInstruction, onApiKeyError]);
 
   const stopConversation = useCallback(() => {
     if (!isLive) return;
@@ -306,8 +349,7 @@ export const useLiveConversation = ({ isSharing, captureFrame, onError, micSensi
     return () => {
       cleanup();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [cleanup]);
 
   return { isLive, startConversation, stopConversation, micVolume, liveMessages };
 };

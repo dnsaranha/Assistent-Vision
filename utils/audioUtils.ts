@@ -1,3 +1,4 @@
+
 /**
  * Decodes a base64 string into a Uint8Array.
  * @param base64 The base64 string to decode.

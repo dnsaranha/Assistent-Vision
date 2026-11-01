@@ -5,6 +5,9 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Visual Voice Assistant</title>
+    <meta name="description" content="An AI assistant that can see your screen and respond to your voice or text commands, helping you with tasks and answering questions about what's on your display." />
+    <meta property="og:title" content="Visual Voice Assistant" />
+    <meta property="og:description" content="An AI assistant that can see your screen and respond to your voice or text commands, helping you with tasks and answering questions about what's on your display." />
     <script src="https://cdn.tailwindcss.com"></script>
   <script type="importmap">
 {
@@ -26,7 +29,21 @@
   .animate-pulse-slow {
     animation: pulse-slow 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-fade-in {
+    animation: fadeIn 0.25s ease-out forwards;
+  }
 </style>
+<link rel="stylesheet" href="/index.css">
 </head>
   <body class="bg-gray-900">
     <div id="root"></div>

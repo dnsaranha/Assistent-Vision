@@ -1,13 +1,8 @@
+
 import { GoogleGenAI, GenerateContentResponse, Part, Type } from "@google/genai";
 import { GeminiResponse, Message, Role, VisualGuide } from "../types";
 
-const API_KEY = process.env.API_KEY;
-
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable is not set.");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+const getApiKey = () => process.env.API_KEY || process.env.GEMINI_API_KEY || '';
 
 const responseSchema = {
     type: Type.OBJECT,
@@ -57,6 +52,11 @@ const responseSchema = {
 };
 
 export async function askAboutScreen(messages: Message[], imageBase64: string | null, systemInstruction: string): Promise<GeminiResponse> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error("Chave de API do Gemini não configurada.");
+  }
+  const ai = new GoogleGenAI({ apiKey });
   // Construct a single prompt with conversation history for context
   const conversationHistory = messages
     .slice(1, -1) // Exclude initial greeting and the current prompt
@@ -103,17 +103,18 @@ export async function askAboutScreen(messages: Message[], imageBase64: string | 
 
   } catch (error) {
     console.error("Error calling Gemini API:", error);
-    const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-    return {
-        text: `Error: ${message}`,
-        annotations: [],
-        visualGuides: [],
-    };
+    // Re-throw the original error so it can be handled by the calling component
+    throw error;
   }
 }
 
 
 export async function generateSummary(messages: Message[], imageBase64: string | null): Promise<string> {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      throw new Error("Chave de API do Gemini não configurada.");
+    }
+    const ai = new GoogleGenAI({ apiKey });
     // Filter out the initial assistant message to avoid including it in the summary
     const conversationHistory = messages.slice(1).map(m => `${m.role === Role.USER ? 'User' : 'Assistant'}: ${m.text}`).join('\n');
     const prompt = `Based on the following conversation history, which may involve multiple speakers, and the final screenshot of the shared screen (if provided), generate a concise summary structured as meeting minutes. Your primary task is to identify and differentiate between speakers (e.g., "Speaker 1:", "Speaker 2:"). Use conversational cues from the text to attribute statements. The summary should include key decisions, action items, and main topics. Where relevant, refer to visual elements from the screenshot to provide context. Format the output in Markdown.\n\nConversation:\n${conversationHistory}`;

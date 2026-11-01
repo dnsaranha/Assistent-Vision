@@ -53,3 +53,17 @@ export const DownloadIcon: React.FC = () => (
         <line x1="12" y1="15" x2="12" y2="3"></line>
     </svg>
 );
+
+export const ChevronDownIcon: React.FC<{ className?: string }> = ({ className = "w-4 h-4 text-white" }) => (
+  <svg 
+    className={className} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth={2.5}
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+  >
+    <polyline points="6 9 12 15 18 9"></polyline>
+  </svg>
+);
