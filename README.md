@@ -42,3 +42,9 @@ Em contas Hobby, as Functions têm duração máxima de 300 segundos. Portanto, 
 3. Teste login, análise de tela, resumo e conversa por voz com microfone e câmera.
 
 O endpoint `/api/health` informa o estado da API. Ele não revela nem retorna os segredos do servidor.
+
+
+## Documentação técnica
+
+- [Arquitetura e operação](docs/ARCHITECTURE.md)
+- [Desempenho e evolução](docs/PERFORMANCE.md)
