@@ -1,6 +1,6 @@
 import type { Express } from 'express';
 import type { Auth } from 'firebase-admin/auth';
-import type { RateLimitRequestHandler } from 'express-rate-limit';
+import type { RequestHandler } from 'express';
 import { GoogleGenAI } from '@google/genai';
 import { getApiKey, responseSchema } from './config';
 import { buildConversationHistory } from './conversationContext';
@@ -8,7 +8,7 @@ import { buildConversationHistory } from './conversationContext';
 export function registerApiRoutes(
   app: Express,
   adminAuth: Auth,
-  apiLimiter: RateLimitRequestHandler
+  apiLimiter: RequestHandler
 ) {
   const authenticate = async (req: any, res: any, next: any) => {
     const authorization = req.headers.authorization || '';
