@@ -40,67 +40,72 @@ export const Controls: React.FC<ControlsProps> = ({
   };
 
   return (
-    <div className="p-2 md:p-4 bg-gray-800/50 border-t border-gray-700">
-      <div className="flex items-center space-x-1 sm:space-x-2">
+    <div className="p-2 sm:p-3 md:p-4 bg-gray-900/90 border-t border-gray-800">
+      <div className="flex items-center gap-1.5 sm:gap-2">
         <button
           onClick={toggleScreenSharing}
           disabled={isLoading || isListening}
-          className={`p-2 rounded-full transition-colors duration-200 ${
+          className={`shrink-0 p-2 sm:p-2.5 rounded-full transition-colors duration-200 ${
             isSharing
               ? 'bg-red-500 hover:bg-red-600'
-              : 'bg-gray-600 hover:bg-gray-500'
+              : 'bg-gray-700 hover:bg-gray-600'
           } disabled:opacity-50 disabled:cursor-not-allowed`}
           aria-label={isSharing ? 'Parar de compartilhar' : 'Compartilhar tela'}
+          title={isSharing ? 'Parar de compartilhar' : 'Compartilhar tela'}
         >
           {isSharing ? <StopCircleIcon /> : <ScreenIcon />}
         </button>
         <button
           onClick={toggleListening}
           disabled={isLoading}
-          className={`p-2 rounded-full transition-all duration-100 ease-out ${
+          className={`shrink-0 p-2 sm:p-2.5 rounded-full transition-all duration-100 ease-out ${
             isListening
               ? 'bg-red-500 hover:bg-red-600'
               : 'bg-cyan-500 hover:bg-cyan-600'
           } disabled:opacity-50 disabled:cursor-not-allowed relative`}
-           style={{
-               transform: `scale(${isListening ? 1 + micVolume * 0.2 : 1})`,
-               boxShadow: isListening ? `0 0 0 ${micVolume * 15}px rgba(239, 68, 68, 0.4)` : 'none'
-            }}
-           aria-label={isListening ? 'Parar de ouvir' : 'Começar a ouvir'}
+          style={{
+            transform: `scale(${isListening ? 1 + micVolume * 0.2 : 1})`,
+            boxShadow: isListening ? `0 0 0 ${micVolume * 15}px rgba(239, 68, 68, 0.4)` : 'none'
+          }}
+          aria-label={isListening ? 'Parar de ouvir' : 'Começar a ouvir'}
+          title={isListening ? 'Parar voz' : 'Iniciar voz em tempo real'}
         >
           <MicIcon />
         </button>
-        <form onSubmit={handleSubmit} className="flex-1 flex items-center">
+        <form onSubmit={handleSubmit} className="flex-1 min-w-0 flex items-center">
           <input
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            placeholder={isListening ? "Ouvindo..." : "Digite sua pergunta..."}
+            placeholder={isListening ? "Ouvindo você..." : "Pergunte ao Vision..."}
             disabled={isLoading || isListening || isSpeaking}
-            className="w-full bg-gray-700 border border-gray-600 rounded-l-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 disabled:opacity-50"
+            className="w-full min-w-0 bg-gray-800 border border-gray-700 rounded-l-lg px-2.5 sm:px-3 py-2 text-xs sm:text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={isLoading || !inputValue.trim() || isListening}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-r-md transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="shrink-0 bg-cyan-600 hover:bg-cyan-500 text-white px-2.5 sm:px-3 py-2 rounded-r-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             aria-label="Enviar mensagem"
+            title="Enviar mensagem"
           >
             <SendIcon />
           </button>
         </form>
-         <button
+        <button
           onClick={onGenerateSummary}
           disabled={isLoading || isListening || !hasConversation}
-          className="p-2 rounded-full bg-gray-600 hover:bg-gray-500 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="shrink-0 p-2 sm:p-2.5 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed hidden xs:inline-flex"
           aria-label="Gerar e baixar resumo"
+          title="Baixar resumo da conversa"
         >
           <DownloadIcon />
         </button>
-         <button
+        <button
           onClick={onOpenSettings}
           disabled={isLoading || isListening}
-          className="p-2 rounded-full bg-gray-600 hover:bg-gray-500 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="shrink-0 p-2 sm:p-2.5 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
           aria-label="Abrir configurações"
+          title="Configurações do Vision"
         >
           <SettingsIcon />
         </button>
