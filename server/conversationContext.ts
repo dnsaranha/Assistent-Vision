@@ -18,14 +18,16 @@ export function buildConversationHistory(
     const text = message.text.trim().slice(-options.maxMessageChars);
     if (!text || remaining <= 0) continue;
     const line = `${message.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
-    if (line.length > remaining) {
-      const clipped = line.slice(-remaining);
-      selected.push(clipped);
+    const separatorLength = selected.length > 0 ? 2 : 0;
+    const available = remaining - separatorLength;
+    if (available <= 0) break;
+    if (line.length > available) {
+      selected.push(line.slice(-available));
       remaining = 0;
       break;
     }
     selected.push(line);
-    remaining -= line.length;
+    remaining = available - line.length;
   }
 
   return selected.reverse().join('\n\n');
