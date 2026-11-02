@@ -8,6 +8,7 @@ import rateLimit from 'express-rate-limit';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { getApiKey, responseSchema } from './server/config';
 import { initializeFirebaseAdmin } from './server/firebaseAdmin';
+import { buildConversationHistory } from './server/conversationContext';
 
 async function createServer() {
   const adminAuth = initializeFirebaseAdmin();
@@ -73,10 +74,11 @@ async function createServer() {
       const ai = new GoogleGenAI({ apiKey });
 
       // Build conversation history
-      const conversationHistory = messages
-        .slice(1, -1)
-        .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
-        .join('\n\n');
+      const conversationHistory = buildConversationHistory(messages.slice(1, -1), {
+        maxMessages: 16,
+        maxChars: 22000,
+        maxMessageChars: 3000,
+      });
 
       const currentPrompt = messages[messages.length - 1]?.text || '';
       const fullPrompt = conversationHistory
@@ -152,10 +154,11 @@ async function createServer() {
     try {
       const ai = new GoogleGenAI({ apiKey });
 
-      const conversationHistory = messages
-        .slice(1)
-        .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
-        .join('\n');
+      const conversationHistory = buildConversationHistory(messages.slice(1), {
+        maxMessages: 24,
+        maxChars: 32000,
+        maxMessageChars: 4000,
+      });
 
       const prompt = `Based on the following conversation history, which may involve multiple speakers, and the final screenshot of the shared screen (if provided), generate a concise summary structured as meeting minutes. Your primary task is to identify and differentiate between speakers (e.g., "Speaker 1:", "Speaker 2:"). Use conversational cues from the text to attribute statements. The summary should include key decisions, action items, and main topics. Where relevant, refer to visual elements from the screenshot to provide context. Format the output in Markdown.\n\nConversation:\n${conversationHistory}`;
 
