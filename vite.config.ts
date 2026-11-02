@@ -48,6 +48,30 @@ export default defineConfig(({ mode }) => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
+          navigateFallback: 'index.html',
+          // API/authenticated data must never be served from an offline cache.
+          navigateFallbackDenylist: [/^\\/api\\//],
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\//,
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'google-fonts-stylesheets',
+                expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              },
+            },
+            {
+              urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\//,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'google-fonts-webfonts',
+                expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              },
+            },
+          ],
         },
         devOptions: {
           enabled: true,
