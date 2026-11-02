@@ -3,6 +3,7 @@ import { Message, Role } from '../types';
 import { decode, decodeAudioData } from '../utils/audioUtils';
 import { mergeTranscript, removeStuttersAndDuplicates } from '../utils/transcriptUtils';
 import { useAudioCues } from './useAudioCues';
+import { auth } from '../firebase';
 
 function encode(bytes: Uint8Array): string {
   let binary = '';
@@ -17,7 +18,7 @@ function createBlob(data: Float32Array): { data: string; mimeType: string } {
   const l = data.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {
-    int16[i] = data[i] * 32768;
+    int16[i] = Math.max(-1, Math.min(1, data[i])) * 32768;
   }
   return {
     data: encode(new Uint8Array(int16.buffer)),
@@ -117,11 +118,20 @@ export const useLiveConversation = ({
     }
 
     if (socketRef.current) {
-      if (socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ type: 'stop' }));
-        socketRef.current.close();
-      }
+      const socket = socketRef.current;
       socketRef.current = null;
+      if (socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(JSON.stringify({ type: 'stop' }));
+        } catch (error) {
+          console.debug('Could not send live stop message:', error);
+        }
+      }
+      // Also close CONNECTING sockets; otherwise stopping during authentication
+      // leaves an orphaned connection until the server authentication timeout.
+      if (socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+        socket.close();
+      }
     }
 
     setIsLive(false);
@@ -214,22 +224,28 @@ export const useLiveConversation = ({
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
-      socket.onopen = () => {
-        socket.send(
-          JSON.stringify({
-            type: 'start',
-            systemInstruction,
-            voiceModel,
-            model: 'gemini-2.5-flash-native-audio-preview-12-2025',
-          })
-        );
+      socket.onopen = async () => {
+        try {
+          const user = auth.currentUser;
+          if (!user) throw new Error('Entre na sua conta para iniciar a conversa ao vivo.');
+          socket.send(JSON.stringify({ type: 'authenticate', token: await user.getIdToken() }));
+        } catch (error: any) {
+          onError(error?.message || 'Falha na autenticação da sessão ao vivo.');
+          cleanup();
+        }
       };
 
       socket.onmessage = async (event) => {
         try {
           const payload = JSON.parse(event.data);
-
-          if (payload.type === 'session_open') {
+          if (payload.type === 'authenticated') {
+            socket.send(JSON.stringify({
+              type: 'start',
+              systemInstruction,
+              voiceModel,
+              model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+            }));
+          } else if (payload.type === 'session_open') {
             // Audio streaming from microphone to server
             scriptProcessor.onaudioprocess = (audioEvt) => {
               if (socket.readyState === WebSocket.OPEN) {

@@ -199,7 +199,22 @@ export const useScreenCapture = ({ shareSystemAudio }: UseScreenCaptureProps) =>
   const captureFrame = useCallback(async (overlayGuides?: VisualGuide[]): Promise<string> => {
     if (screenshotDataUrl) {
       if (!overlayGuides || overlayGuides.length === 0) {
-        return screenshotDataUrl.split(',')[1];
+        // Uploaded screenshots may be PNG or WebP. Normalize every frame to JPEG
+        // because the backend sends imageBase64 to Gemini as image/jpeg.
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth || img.width || 1280;
+            canvas.height = img.naturalHeight || img.height || 720;
+            const context = canvas.getContext('2d');
+            if (!context) return reject(new Error('Erro ao preparar a imagem.'));
+            context.drawImage(img, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
+          };
+          img.onerror = () => reject(new Error('Não foi possível ler a imagem enviada.'));
+          img.src = screenshotDataUrl;
+        });
       }
       // If there are overlay guides on a static screenshot, composite them
       return new Promise((resolve) => {

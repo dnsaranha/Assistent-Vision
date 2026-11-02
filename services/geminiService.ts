@@ -1,4 +1,12 @@
 import { GeminiResponse, Message, VisualGuide } from "../types";
+import { auth } from "../firebase";
+
+async function authenticatedHeaders(): Promise<HeadersInit> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Entre na sua conta para usar este recurso.');
+  const token = await user.getIdToken();
+  return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+}
 
 export async function askAboutScreen(
   messages: Message[],
@@ -7,9 +15,7 @@ export async function askAboutScreen(
 ): Promise<GeminiResponse> {
   const response = await fetch('/api/screen/ask', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: await authenticatedHeaders(),
     body: JSON.stringify({
       messages,
       imageBase64,
@@ -36,9 +42,7 @@ export async function generateSummary(
 ): Promise<string> {
   const response = await fetch('/api/screen/summary', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: await authenticatedHeaders(),
     body: JSON.stringify({
       messages,
       imageBase64,
