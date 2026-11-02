@@ -4,7 +4,6 @@ import { askAboutScreen, generateSummary } from './services/geminiService';
 import { useScreenCapture } from './hooks/useScreenCapture';
 import { useLiveConversation } from './hooks/useLiveConversation';
 import { useAuth } from './hooks/useAuth';
-import { SettingsModal, Settings } from './components/SettingsModal';
 import { LoginGate } from './components/LoginGate';
 import { AppWorkspace } from './components/AppWorkspace';
 
