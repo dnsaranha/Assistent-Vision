@@ -18,7 +18,7 @@ function createBlob(data: Float32Array): { data: string; mimeType: string } {
   const l = data.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {
-    int16[i] = data[i] * 32768;
+    int16[i] = Math.max(-1, Math.min(1, data[i])) * 32768;
   }
   return {
     data: encode(new Uint8Array(int16.buffer)),
@@ -118,11 +118,20 @@ export const useLiveConversation = ({
     }
 
     if (socketRef.current) {
-      if (socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ type: 'stop' }));
-        socketRef.current.close();
-      }
+      const socket = socketRef.current;
       socketRef.current = null;
+      if (socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(JSON.stringify({ type: 'stop' }));
+        } catch (error) {
+          console.debug('Could not send live stop message:', error);
+        }
+      }
+      // Also close CONNECTING sockets; otherwise stopping during authentication
+      // leaves an orphaned connection until the server authentication timeout.
+      if (socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+        socket.close();
+      }
     }
 
     setIsLive(false);
