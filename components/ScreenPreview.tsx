@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ScreenIcon } from './Icons';
 import { Annotation, VisualGuide, GuideType } from '../types';
 import { CaptureType } from '../hooks/useScreenCapture';
+import { StepRoadmapDrawer } from './StepRoadmapDrawer';
 
 interface ScreenPreviewProps {
   stream: MediaStream | null;
@@ -622,57 +623,13 @@ export const ScreenPreview: React.FC<ScreenPreviewProps> = ({
           </div>
         )}
 
-        {/* Step-by-Step Roadmap Drawer */}
-        {showStepsDrawer && stepGuides.length > 0 && (
-          <div className="absolute top-2 right-2 bottom-2 w-72 max-w-[85%] bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl backdrop-blur-xl p-3 z-30 flex flex-col animate-fade-in">
-            <div className="flex items-center justify-between pb-2 border-b border-gray-800">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-amber-400" />
-                <h4 className="text-xs font-bold text-gray-100">Roteiro Passo a Passo</h4>
-              </div>
-              <button
-                onClick={() => setShowStepsDrawer(false)}
-                className="text-gray-400 hover:text-white p-1 rounded"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto py-2 space-y-2 pr-1">
-              {stepGuides.map((step) => {
-                const isDone = completedSteps[step.number];
-                return (
-                  <div
-                    key={`step-list-${step.number}`}
-                    onClick={() => toggleStepCompleted(step.number)}
-                    className={`p-2 rounded-lg border text-xs cursor-pointer transition flex items-start gap-2.5 ${
-                      isDone
-                        ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
-                        : 'bg-gray-800/60 border-gray-700 text-gray-200 hover:border-gray-600'
-                    }`}
-                  >
-                    <span
-                      className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5 ${
-                        isDone ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
-                      }`}
-                    >
-                      {isDone ? '✓' : step.number}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className={`font-medium ${isDone ? 'line-through opacity-75' : ''}`}>
-                        {step.label || `Etapa ${step.number}`}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <p className="text-[10px] text-gray-500 pt-2 border-t border-gray-800 text-center">
-              Clique em um passo para marcar como concluído
-            </p>
-          </div>
-        )}
+        <StepRoadmapDrawer
+          isOpen={showStepsDrawer}
+          steps={stepGuides}
+          completedSteps={completedSteps}
+          onToggleStep={toggleStepCompleted}
+          onClose={() => setShowStepsDrawer(false)}
+        />
       </div>
 
       {/* Floating Stop Share Button when active */}
