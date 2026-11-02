@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: assistent-vision-api
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FIREBASE_PROJECT_ID
+        value: gen-lang-client-0421027303
+      - key: CORS_ORIGINS
+        value: https://assistent-vision.vercel.app,https://assistent-vision-denis-nascimento-aranhas-projects.vercel.app,https://assistent-vision-git-main-denis-nascimento-aranhas-projects.vercel.app
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
