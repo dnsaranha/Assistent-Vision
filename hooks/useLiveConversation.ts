@@ -219,8 +219,10 @@ export const useLiveConversation = ({
 
       setIsLive(true);
 
+      const configuredWsBase = (import.meta.env.VITE_WS_BASE_URL || '').replace(/\\/+$/, '');
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/live-ws`;
+      const wsBase = configuredWsBase || `${protocol}//${window.location.host}`;
+      const wsUrl = `${wsBase}/api/live-ws`;
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
