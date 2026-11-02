@@ -5,6 +5,9 @@ import fs from 'fs';
 import { parse as parseUrl } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import { initializeApp as initializeAdminApp, cert, applicationDefault, getApps as getAdminApps } from 'firebase-admin/app';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { GoogleGenAI, Type, Modality } from '@google/genai';
 
 // Load environment variables from .env.local or .env if present
@@ -87,12 +90,52 @@ const responseSchema = {
   required: ["response_text"],
 };
 
+function initializeFirebaseAdmin() {
+  if (getAdminApps().length) return getAdminAuth();
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (serviceAccountJson) {
+    const serviceAccount = JSON.parse(serviceAccountJson);
+    initializeAdminApp({ credential: cert(serviceAccount), projectId: projectId || serviceAccount.project_id });
+  } else {
+    initializeAdminApp({ credential: applicationDefault(), ...(projectId ? { projectId } : {}) });
+  }
+  return getAdminAuth();
+}
+
 async function createServer() {
+  const adminAuth = initializeFirebaseAdmin();
   const app = express();
   const server = http.createServer(app);
 
-  app.use(cors());
-  app.use(express.json({ limit: '50mb' }));
+  const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(v => v.trim()).filter(Boolean);
+  app.use(cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error('Origem não autorizada pelo CORS.'));
+    },
+    credentials: true,
+  }));
+  app.use(express.json({ limit: '15mb' }));
+
+  const apiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 20,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Muitas solicitações. Aguarde um minuto e tente novamente.' },
+  });
+  const authenticate = async (req: any, res: any, next: any) => {
+    const authorization = req.headers.authorization || '';
+    const match = authorization.match(/^Bearer (.+)$/i);
+    if (!match) return res.status(401).json({ error: 'Autenticação necessária.' });
+    try {
+      req.user = await adminAuth.verifyIdToken(match[1]);
+      return next();
+    } catch {
+      return res.status(401).json({ error: 'Sessão inválida ou expirada. Entre novamente.' });
+    }
+  };
 
   // API Health Check
   app.get('/api/health', (req, res) => {
@@ -104,7 +147,7 @@ async function createServer() {
   });
 
   // REST API: Ask About Screen
-  app.post('/api/screen/ask', async (req, res) => {
+  app.post('/api/screen/ask', apiLimiter, authenticate, async (req, res) => {
     const apiKey = getApiKey();
     if (!apiKey) {
       return res.status(500).json({
@@ -112,8 +155,11 @@ async function createServer() {
       });
     }
 
-    const { messages, imageBase64, systemInstruction } = req.body;
-    if (!messages || !Array.isArray(messages)) {
+    const { messages, imageBase64, systemInstruction } = req.body || {};
+    if (!messages || !Array.isArray(messages) || messages.length > 40 ||
+        messages.some((m: any) => !m || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string' || m.text.length > 12000) ||
+        (imageBase64 != null && (typeof imageBase64 !== 'string' || imageBase64.length > 12_000_000)) ||
+        (systemInstruction != null && (typeof systemInstruction !== 'string' || systemInstruction.length > 8000))) {
       return res.status(400).json({ error: "Parâmetro 'messages' inválido." });
     }
 
@@ -177,13 +223,12 @@ async function createServer() {
       });
     } catch (err: any) {
       console.error("Error in /api/screen/ask:", err);
-      const errorMessage = err?.message || 'Erro desconhecido ao processar com Gemini.';
-      return res.status(500).json({ error: errorMessage });
+      return res.status(500).json({ error: 'Erro interno ao processar a solicitação.' });
     }
   });
 
   // REST API: Generate Meeting/Session Summary
-  app.post('/api/screen/summary', async (req, res) => {
+  app.post('/api/screen/summary', apiLimiter, authenticate, async (req, res) => {
     const apiKey = getApiKey();
     if (!apiKey) {
       return res.status(500).json({
@@ -191,8 +236,10 @@ async function createServer() {
       });
     }
 
-    const { messages, imageBase64 } = req.body;
-    if (!messages || !Array.isArray(messages)) {
+    const { messages, imageBase64 } = req.body || {};
+    if (!messages || !Array.isArray(messages) || messages.length > 40 ||
+        messages.some((m: any) => !m || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string' || m.text.length > 12000) ||
+        (imageBase64 != null && (typeof imageBase64 !== 'string' || imageBase64.length > 12_000_000))) {
       return res.status(400).json({ error: "Parâmetro 'messages' inválido." });
     }
 
@@ -231,13 +278,13 @@ async function createServer() {
       });
     } catch (err: any) {
       console.error("Error in /api/screen/summary:", err);
-      const errorMessage = err?.message || 'Erro ao gerar resumo da conversa.';
-      return res.status(500).json({ error: errorMessage });
+      return res.status(500).json({ error: 'Erro interno ao gerar o resumo.' });
     }
   });
 
   // WebSocket Server for Live API Proxy
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 5 * 1024 * 1024 });
+  const activeUsers = new Set<string>();
 
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = parseUrl(request.url || '');
@@ -251,12 +298,38 @@ async function createServer() {
   wss.on('connection', (ws: WebSocket) => {
     let liveSession: any = null;
     let isClosed = false;
+    let authenticatedUid: string | null = null;
+    let authTimeout: NodeJS.Timeout | null = setTimeout(() => ws.close(4401, 'Authentication timeout'), 5000);
 
     ws.on('message', async (data) => {
       try {
         const payload = JSON.parse(data.toString());
 
+        if (!authenticatedUid) {
+          if (payload.type !== 'authenticate' || typeof payload.token !== 'string' || payload.token.length > 10000) {
+            ws.close(4401, 'Authentication required');
+            return;
+          }
+          try {
+            const decoded = await adminAuth.verifyIdToken(payload.token);
+            authenticatedUid = decoded.uid;
+            if (authTimeout) clearTimeout(authTimeout);
+            authTimeout = null;
+            if (activeUsers.has(authenticatedUid)) {
+              ws.close(4429, 'Live session already active');
+              authenticatedUid = null;
+              return;
+            }
+            activeUsers.add(authenticatedUid);
+            ws.send(JSON.stringify({ type: 'authenticated' }));
+          } catch {
+            ws.close(4401, 'Invalid authentication');
+          }
+          return;
+        }
+
         if (payload.type === 'start') {
+          if (liveSession) return;
           const apiKey = getApiKey();
           if (!apiKey) {
             ws.send(JSON.stringify({
@@ -312,7 +385,7 @@ async function createServer() {
             },
           });
         } else if (payload.type === 'realtime_input' && liveSession) {
-          liveSession.sendRealtimeInput(payload.input);
+          if (payload.input && typeof payload.input === 'object') liveSession.sendRealtimeInput(payload.input);
         } else if (payload.type === 'stop') {
           if (liveSession) {
             try {
@@ -325,11 +398,14 @@ async function createServer() {
         }
       } catch (err: any) {
         console.error("Error processing WebSocket message on server:", err);
+        if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'Message processing failed');
       }
     });
 
     const cleanup = () => {
       isClosed = true;
+      if (authTimeout) clearTimeout(authTimeout);
+      if (authenticatedUid) activeUsers.delete(authenticatedUid);
       if (liveSession) {
         try {
           liveSession.close();
@@ -356,7 +432,7 @@ async function createServer() {
     // Production: Serve built assets
     const distPath = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('/{*splat}', (req, res) => {
       res.sendFile(path.resolve(distPath, 'index.html'));
     });
   }
