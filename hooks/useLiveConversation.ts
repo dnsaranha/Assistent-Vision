@@ -3,6 +3,7 @@ import { Message, Role } from '../types';
 import { decode, decodeAudioData } from '../utils/audioUtils';
 import { mergeTranscript, removeStuttersAndDuplicates } from '../utils/transcriptUtils';
 import { useAudioCues } from './useAudioCues';
+import { auth } from '../firebase';
 
 function encode(bytes: Uint8Array): string {
   let binary = '';
@@ -216,7 +217,7 @@ export const useLiveConversation = ({
 
       socket.onopen = async () => {
         try {
-          const user = (await import('../firebase')).auth.currentUser;
+          const user = auth.currentUser;
           if (!user) throw new Error('Entre na sua conta para iniciar a conversa ao vivo.');
           socket.send(JSON.stringify({ type: 'authenticate', token: await user.getIdToken() }));
         } catch (error: any) {
@@ -229,16 +230,12 @@ export const useLiveConversation = ({
         try {
           const payload = JSON.parse(event.data);
           if (payload.type === 'authenticated') {
-            socket.send(
-              JSON.stringify({
-                type: 'start',
-            systemInstruction,
-            voiceModel,
-            model: 'gemini-2.5-flash-native-audio-preview-12-2025',
-          })
-        );
-      };
-
+            socket.send(JSON.stringify({
+              type: 'start',
+              systemInstruction,
+              voiceModel,
+              model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+            }));
           } else if (payload.type === 'session_open') {
             // Audio streaming from microphone to server
             scriptProcessor.onaudioprocess = (audioEvt) => {
