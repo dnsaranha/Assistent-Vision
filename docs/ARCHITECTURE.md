@@ -14,6 +14,7 @@ Não há serviço Render nem dependência de backend externo adicional.
 - `components/AppWorkspace.tsx`: composição visual da área autenticada, cabeçalho, painéis, controles, publicidade e modal de configurações.
 - `components/ScreenPreview.tsx`: visualização da tela/câmera, upload/cola de imagens e renderização das orientações visuais.
 - `components/StepRoadmapDrawer.tsx`: lista acessível de passos produzidos pela IA e estado de conclusão.
+- `components/VisualGuideOverlay.tsx`: desenho SVG isolado de anotações, setas, círculos, retângulos e etapas.
 - `hooks/useScreenCapture.ts`: captura e encerramento de mídia.
 - `hooks/useLiveConversation.ts`: ciclo de vida da conversa de voz, áudio, reprodução, transcrição e WebSocket.
 - `services/geminiService.ts`: chamadas autenticadas à API do mesmo domínio e compactação do histórico antes do envio.
