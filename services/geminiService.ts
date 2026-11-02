@@ -1,11 +1,9 @@
 import { GeminiResponse, Message, VisualGuide } from "../types";
 import { auth } from "../firebase";
 
-// VITE_API_BASE_URL points to the separately hosted Node backend (for example,
-// https://assistent-vision-api.onrender.com). Empty keeps same-origin local dev.
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+// The API is deployed in the same Vercel project and uses the same origin.
 function apiUrl(path: string): string {
-  return API_BASE_URL ? `${API_BASE_URL}${path}` : path;
+  return path;
 }
 
 async function authenticatedHeaders(): Promise<HeadersInit> {
