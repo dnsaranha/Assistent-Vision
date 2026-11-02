@@ -430,7 +430,7 @@ async function createServer() {
   });
 
   // Development: Mount Vite Middlewares
-  if (process.env.NODE_ENV !== 'production') {
+  if (!process.env.VERCEL && process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
