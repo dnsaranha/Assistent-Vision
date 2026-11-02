@@ -84,7 +84,9 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks(id) {
             if (id.includes('/node_modules/react/') || id.includes('/node_modules/react-dom/')) return 'react-vendor';
-            if (id.includes('/node_modules/firebase/') || id.includes('/node_modules/@firebase/')) return 'firebase-vendor';
+            if (id.includes('/node_modules/firebase/auth/') || id.includes('/node_modules/@firebase/auth/')) return 'firebase-auth';
+            if (id.includes('/node_modules/firebase/firestore/') || id.includes('/node_modules/@firebase/firestore/')) return 'firebase-firestore';
+            if (id.includes('/node_modules/firebase/') || id.includes('/node_modules/@firebase/')) return 'firebase-core';
           },
         },
       },
