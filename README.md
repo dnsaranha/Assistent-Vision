@@ -2,53 +2,43 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# AssistEnt Vision
 
-This contains everything you need to run your app locally.
+Assistente visual e de voz com análise de tela, Firebase Authentication e Gemini.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1CmlOzW8EQ6DI0mR_RoXqYpbBbgU6sYWp
+## Executar localmente
 
-## Run Locally
+**Pré-requisito:** Node.js 22 ou superior.
 
-**Prerequisites:**  Node.js
+1. Instale as dependências: `npm install`.
+2. Crie `.env.local` com `GEMINI_API_KEY`, `FIREBASE_PROJECT_ID` e `FIREBASE_SERVICE_ACCOUNT_JSON`.
+3. Execute `npm run dev`.
+4. Abra `http://localhost:3000`.
 
+## Publicação: somente Vercel + Firebase + Gemini
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+O frontend e o backend Express/WebSocket são publicados no mesmo projeto Vercel. O Firebase Authentication autentica os usuários e o backend valida os ID tokens com Firebase Admin. O Gemini processa as análises de tela e a conversa por voz. Não é necessário Render, outro servidor ou banco de dados adicional para esta arquitetura.
 
+### Variáveis na Vercel
 
-## Deploy com frontend na Vercel e backend no Render
+Em **Project → Settings → Environment Variables**, configure no ambiente Production:
 
-O projeto usa Express e WebSocket para a API de tela e a conversa ao vivo. A Vercel hospeda o frontend; o backend deve rodar como serviço Node persistente.
+- `GEMINI_API_KEY` ou a variável `API_KEY` já existente no projeto.
+- `FIREBASE_PROJECT_ID`: `gen-lang-client-0421027303`.
+- `FIREBASE_SERVICE_ACCOUNT_JSON`: JSON completo da conta de serviço Firebase, marcado como Sensitive/Secret.
 
-### 1. Criar o serviço no Render
+Nunca coloque a chave Gemini ou a conta de serviço em variáveis `VITE_*`: elas seriam expostas no bundle do navegador. A configuração Firebase usada pelo frontend é pública por projeto e deve continuar protegida pelas Firebase Security Rules.
 
-1. No Render, crie um **New + → Blueprint** e selecione este repositório.
-2. O arquivo `render.yaml` configura build, inicialização e health check.
-3. Cadastre os segredos solicitados pelo Blueprint:
-   - `GEMINI_API_KEY`: chave da API Gemini (não use a variável de frontend).
-   - `FIREBASE_SERVICE_ACCOUNT_JSON`: JSON completo da conta de serviço Firebase.
-4. Confirme `FIREBASE_PROJECT_ID` e `CORS_ORIGINS` para os domínios públicos da Vercel.
-5. Após o primeiro deploy, copie a URL HTTPS do serviço Render.
+### API e conversa ao vivo
 
-Use um plano de instância que permaneça ativo para conversas WebSocket contínuas. Instâncias gratuitas podem entrar em suspensão e interromper sessões ao vivo.
+A função `api/[...path].ts` exporta o servidor HTTP Express e habilita as rotas REST e o endpoint WebSocket `/api/live-ws` no próprio domínio Vercel. O projeto usa Node.js com Fluid Compute; WebSockets são suportados nativamente pela Vercel.
 
-### 2. Configurar a Vercel
+Em contas Hobby, as Functions têm duração máxima de 300 segundos. Portanto, uma conexão de voz ao vivo pode ser encerrada ao atingir esse limite; o usuário poderá iniciar uma nova sessão. O projeto não depende de estado compartilhado entre instâncias.
 
-Em Project → Settings → Environment Variables, cadastre em Production (e Preview se desejar testar previews):
+### Após configurar
 
-- `VITE_API_BASE_URL`: URL HTTPS do serviço Render, sem barra final.
-- `VITE_WS_BASE_URL`: URL WSS do mesmo serviço, por exemplo `wss://seu-servico.onrender.com`.
+1. Confira se as três variáveis estão cadastradas no ambiente Production.
+2. Faça um novo deploy na Vercel.
+3. Teste login, análise de tela, resumo e conversa por voz com microfone e câmera.
 
-Depois, faça um novo deploy do frontend. Essas variáveis são incorporadas no build do Vite.
-
-### 3. Verificar
-
-- Abra `https://SUA-URL-RENDER/api/health`; deve retornar JSON com `status: "ok"`.
-- Faça login no frontend e teste uma pergunta sobre a tela.
-- Teste iniciar, falar, receber áudio e encerrar uma conversa ao vivo.
-
-Nunca coloque `GEMINI_API_KEY` ou `FIREBASE_SERVICE_ACCOUNT_JSON` em variáveis `VITE_*`: variáveis Vite ficam públicas no bundle do navegador.
+O endpoint `/api/health` informa o estado da API. Ele não revela nem retorna os segredos do servidor.

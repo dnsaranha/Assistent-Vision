@@ -116,7 +116,7 @@ async function createServer() {
     },
     credentials: true,
   }));
-  app.use(express.json({ limit: '15mb' }));
+  app.use(express.json({ limit: '4mb' }));
 
   const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -158,7 +158,7 @@ async function createServer() {
     const { messages, imageBase64, systemInstruction } = req.body || {};
     if (!messages || !Array.isArray(messages) || messages.length > 40 ||
         messages.some((m: any) => !m || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string' || m.text.length > 12000) ||
-        (imageBase64 != null && (typeof imageBase64 !== 'string' || imageBase64.length > 12_000_000)) ||
+        (imageBase64 != null && (typeof imageBase64 !== 'string' || imageBase64.length > 3_800_000)) ||
         (systemInstruction != null && (typeof systemInstruction !== 'string' || systemInstruction.length > 8000))) {
       return res.status(400).json({ error: "Parâmetro 'messages' inválido." });
     }
@@ -239,7 +239,7 @@ async function createServer() {
     const { messages, imageBase64 } = req.body || {};
     if (!messages || !Array.isArray(messages) || messages.length > 40 ||
         messages.some((m: any) => !m || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string' || m.text.length > 12000) ||
-        (imageBase64 != null && (typeof imageBase64 !== 'string' || imageBase64.length > 12_000_000))) {
+        (imageBase64 != null && (typeof imageBase64 !== 'string' || imageBase64.length > 3_800_000))) {
       return res.status(400).json({ error: "Parâmetro 'messages' inválido." });
     }
 
@@ -446,13 +446,17 @@ async function createServer() {
     });
   }
 
-  const PORT = parseInt(process.env.PORT || '3000', 10);
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running at http://0.0.0.0:${PORT}`);
-  });
+  // Vercel imports this HTTP server as a Function entrypoint. Locally, keep
+  // the standalone Express server for the existing npm run dev workflow.
+  if (!process.env.VERCEL) {
+    const PORT = parseInt(process.env.PORT || '3000', 10);
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running at http://0.0.0.0:${PORT}`);
+    });
+  }
+
+  return server;
 }
 
-createServer().catch((err) => {
-  console.error("Failed to start server:", err);
-  process.exit(1);
-});
+const server = await createServer();
+export default server;
