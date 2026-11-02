@@ -214,10 +214,24 @@ export const useLiveConversation = ({
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
-      socket.onopen = () => {
-        socket.send(
-          JSON.stringify({
-            type: 'start',
+      socket.onopen = async () => {
+        try {
+          const user = (await import('../firebase')).auth.currentUser;
+          if (!user) throw new Error('Entre na sua conta para iniciar a conversa ao vivo.');
+          socket.send(JSON.stringify({ type: 'authenticate', token: await user.getIdToken() }));
+        } catch (error: any) {
+          onError(error?.message || 'Falha na autenticação da sessão ao vivo.');
+          cleanup();
+        }
+      };
+
+      socket.onmessage = async (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'authenticated') {
+            socket.send(
+              JSON.stringify({
+                type: 'start',
             systemInstruction,
             voiceModel,
             model: 'gemini-2.5-flash-native-audio-preview-12-2025',
@@ -225,11 +239,7 @@ export const useLiveConversation = ({
         );
       };
 
-      socket.onmessage = async (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-
-          if (payload.type === 'session_open') {
+          } else if (payload.type === 'session_open') {
             // Audio streaming from microphone to server
             scriptProcessor.onaudioprocess = (audioEvt) => {
               if (socket.readyState === WebSocket.OPEN) {
