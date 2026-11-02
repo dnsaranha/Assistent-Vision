@@ -52,6 +52,7 @@ export const useLiveConversation = ({
   onApiKeyError,
 }: UseLiveConversationProps) => {
   const [isLive, setIsLive] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [micVolume, setMicVolume] = useState(0);
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
 
@@ -72,20 +73,44 @@ export const useLiveConversation = ({
   const activeTurnRoleRef = useRef<Role | null>(null);
   const nextAudioStartTime = useRef(0);
 
+function initOutputAudioContext(deviceId?: string): AudioContext {
+  const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+  let ctx: AudioContext;
+  try {
+    ctx = new AudioCtx({ sampleRate: 24000 });
+  } catch {
+    ctx = new AudioCtx();
+  }
+  if (deviceId && deviceId !== 'default' && typeof (ctx as any).setSinkId === 'function') {
+    (ctx as any).setSinkId(deviceId).catch((err: any) => {
+      console.warn("Could not set audio sinkId:", err);
+    });
+  }
+  return ctx;
+}
+
   const { playStartSound, playStopSound } = useAudioCues();
 
   useEffect(() => {
     if (isLive) {
-      if (outputAudioContextRef.current) {
-        outputAudioContextRef.current.close();
+      if (outputAudioContextRef.current && outputAudioContextRef.current.state !== 'closed') {
+        outputAudioContextRef.current.close().catch(() => {});
       }
-      outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: 24000,
-        sinkId: audioOutputDeviceId,
-      });
+      outputAudioContextRef.current = initOutputAudioContext(audioOutputDeviceId);
       nextAudioStartTime.current = 0;
     }
   }, [audioOutputDeviceId, isLive]);
+
+  const interruptSpeech = useCallback(() => {
+    playingSourcesRef.current.forEach((source) => {
+      try {
+        source.stop();
+      } catch (e) {}
+    });
+    playingSourcesRef.current.clear();
+    nextAudioStartTime.current = 0;
+    setIsSpeaking(false);
+  }, []);
 
   const cleanup = useCallback(() => {
     if (animationFrameRef.current) {
@@ -127,14 +152,13 @@ export const useLiveConversation = ({
           console.debug('Could not send live stop message:', error);
         }
       }
-      // Also close CONNECTING sockets; otherwise stopping during authentication
-      // leaves an orphaned connection until the server authentication timeout.
       if (socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
         socket.close();
       }
     }
 
     setIsLive(false);
+    setIsSpeaking(false);
     setMicVolume(0);
     micVolumeRef.current = 0;
     activeTurnRoleRef.current = null;
@@ -153,25 +177,48 @@ export const useLiveConversation = ({
     nextAudioStartTime.current = 0;
 
     try {
-      // Use full acoustic echo cancellation, noise suppression, and auto gain
-      const micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 16000,
-        },
-      });
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Seu navegador não possui suporte para acesso ao microfone.");
+      }
+
+      // Proactively check permission state if API is supported
+      if (navigator.permissions && navigator.permissions.query) {
+        try {
+          const perm = await navigator.permissions.query({ name: 'microphone' as any });
+          if (perm.state === 'denied') {
+            throw new Error("Permissão de microfone bloqueada. Permita o microfone nas permissões do site na barra de endereços.");
+          }
+        } catch {}
+      }
+
+      // Request mic with echo cancellation, with fallback to basic audio if hardware rejects constraints
+      let micStream: MediaStream;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (e1: any) {
+        // If constraints fail on mobile or external mics, fallback to unconstrained audio
+        if (e1?.name === 'OverconstrainedError' || e1?.name === 'TypeError') {
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } else {
+          throw e1;
+        }
+      }
       mediaStreamRef.current = micStream;
 
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: 16000,
-      });
-      outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: 24000,
-        sinkId: audioOutputDeviceId,
-      });
+      try {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
+          sampleRate: 16000,
+        });
+      } catch {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      outputAudioContextRef.current = initOutputAudioContext(audioOutputDeviceId);
 
       let inputStream: MediaStream = micStream;
 
@@ -249,20 +296,16 @@ export const useLiveConversation = ({
             // Audio streaming from microphone to server
             scriptProcessor.onaudioprocess = (audioEvt) => {
               if (socket.readyState === WebSocket.OPEN) {
-                // If model is speaking through speakers, prevent microphone loopback
-                // unless user speaks loudly (interruption threshold >= 0.22)
                 const isModelSpeaking = playingSourcesRef.current.size > 0;
-                if (isModelSpeaking && micVolumeRef.current < 0.22) {
-                  return; // Don't stream phone/computer speaker audio back to Gemini
-                }
-
-                // If user speaks loud enough while model is speaking, stop playback locally for barge-in
-                if (isModelSpeaking && micVolumeRef.current >= 0.22) {
-                  playingSourcesRef.current.forEach((src) => {
-                    try { src.stop(); } catch (e) {}
-                  });
-                  playingSourcesRef.current.clear();
-                  nextAudioStartTime.current = 0;
+                
+                // If model is actively speaking through device speakers, prevent microphone loopback.
+                // If user speaks with strong clear voice (>= 0.38), interrupt playback cleanly.
+                if (isModelSpeaking) {
+                  if (micVolumeRef.current >= 0.38) {
+                    interruptSpeech();
+                  } else {
+                    return; // Mute input so device speakers don't echo back into Gemini
+                  }
                 }
 
                 const inputData = audioEvt.inputBuffer.getChannelData(0);
@@ -303,7 +346,6 @@ export const useLiveConversation = ({
             if (message.serverContent?.inputTranscription) {
               const rawText = message.serverContent.inputTranscription.text;
 
-              // If previous active turn was ASSISTANT, this is a BRAND NEW user turn:
               if (activeTurnRoleRef.current === Role.ASSISTANT) {
                 currentInputRef.current = '';
                 currentOutputRef.current = '';
@@ -330,7 +372,6 @@ export const useLiveConversation = ({
             if (message.serverContent?.outputTranscription) {
               const rawText = message.serverContent.outputTranscription.text;
 
-              // If previous active turn was USER, this is a BRAND NEW assistant turn:
               if (activeTurnRoleRef.current === Role.USER) {
                 currentOutputRef.current = '';
               }
@@ -354,11 +395,7 @@ export const useLiveConversation = ({
 
             const interrupted = message.serverContent?.interrupted;
             if (interrupted) {
-              playingSourcesRef.current.forEach((src) => {
-                try { src.stop(); } catch (e) {}
-              });
-              playingSourcesRef.current.clear();
-              nextAudioStartTime.current = 0;
+              interruptSpeech();
             }
 
             const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
@@ -384,8 +421,12 @@ export const useLiveConversation = ({
 
               sourceNode.addEventListener('ended', () => {
                 playingSourcesRef.current.delete(sourceNode);
+                if (playingSourcesRef.current.size === 0) {
+                  setIsSpeaking(false);
+                }
               });
               playingSourcesRef.current.add(sourceNode);
+              setIsSpeaking(true);
 
               sourceNode.start(startTime);
               nextAudioStartTime.current = startTime + audioBuffer.duration;
@@ -394,6 +435,7 @@ export const useLiveConversation = ({
             if (message.serverContent?.turnComplete) {
               currentInputRef.current = '';
               currentOutputRef.current = '';
+              activeTurnRoleRef.current = null;
             }
           } else if (payload.type === 'session_error') {
             if (payload.error === 'API_KEY_NOT_FOUND') {
@@ -420,10 +462,25 @@ export const useLiveConversation = ({
         cleanup();
       };
     } catch (err: any) {
-      console.error("Error starting live conversation:", err);
-      if (err?.name === 'NotAllowedError' || (err?.message || '').toLowerCase().includes('permission')) {
-        onError("Permissão de microfone negada. Permita o acesso ao microfone no navegador para conversar com o Vision.");
+      const msg = (err?.message || '').toLowerCase();
+      const isPerm = err?.name === 'NotAllowedError' || 
+                     err?.name === 'PermissionDeniedError' || 
+                     err?.name === 'SecurityError' ||
+                     msg.includes('permission') || 
+                     msg.includes('permissão') ||
+                     msg.includes('denied');
+
+      const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
+
+      if (isPerm) {
+        console.warn("Acesso ao microfone negado pelo usuário ou pelo navegador:", err?.message || err);
+        if (isInIframe) {
+          onError("Permissão de microfone bloqueada pelo ambiente iframe. Abra o Vision em 'Nova Aba' para usar a voz.");
+        } else {
+          onError("Permissão de microfone negada. Toque no ícone de opções/cadeado na barra de endereços do seu navegador e permita o microfone.");
+        }
       } else {
+        console.warn("Aviso ao iniciar conversa de áudio ao vivo:", err);
         onError(err?.message || "Erro ao iniciar microfone para a conversa ao vivo.");
       }
       cleanup();
@@ -439,6 +496,7 @@ export const useLiveConversation = ({
     isSharing,
     captureFrame,
     cleanup,
+    interruptSpeech,
     onApiKeyError,
     onError,
   ]);
@@ -450,8 +508,10 @@ export const useLiveConversation = ({
 
   return {
     isLive,
+    isSpeaking,
     startConversation,
     stopConversation,
+    interruptSpeech,
     liveMessages,
     micVolume,
   };

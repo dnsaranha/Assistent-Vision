@@ -8,8 +8,6 @@ export interface Settings {
     shareSystemAudio: boolean;
     systemInstruction: string;
     liveSystemInstruction: string;
-    adMobPublisherId?: string;
-    adMobSlotId?: string;
 }
 
 interface SettingsModalProps {
@@ -197,59 +195,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                                 className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                                 placeholder="Defina o comportamento do assistente de voz..."
                             />
-                        </div>
-
-                        {/* Monetization & Publicidade (AdSense / AdMob) */}
-                        <div className="pt-4 border-t border-gray-700">
-                            <div className="flex items-center gap-2 mb-2">
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 uppercase">
-                                    Monetização
-                                </span>
-                                <h3 className="text-sm font-semibold text-gray-200">Publicidade Google AdSense / AdMob</h3>
-                            </div>
-
-                            <p className="text-xs text-gray-400 mb-3 leading-relaxed">
-                                Em aplicações Web e PWAs (celular ou PC), a rede de publicidade do Google opera via <strong className="text-gray-200">Google AdSense</strong>. O AdMob é utilizado quando o aplicativo é empacotado nativamente (.apk).
-                            </p>
-
-                            <div className="space-y-3 bg-gray-900/60 p-3 rounded-lg border border-gray-700/80">
-                                <div>
-                                    <label htmlFor="ad-pub-id" className="block text-xs font-medium text-gray-300 mb-1">
-                                        ID de Editor (Publisher ID)
-                                    </label>
-                                    <input
-                                        id="ad-pub-id"
-                                        type="text"
-                                        placeholder="ca-pub-XXXXXXXXXXXXXXXX"
-                                        value={settings.adMobPublisherId || ''}
-                                        onChange={e => onSettingsChange({ ...settings, adMobPublisherId: e.target.value })}
-                                        className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-1.5 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
-                                    />
-                                </div>
-
-                                <div>
-                                    <label htmlFor="ad-slot-id" className="block text-xs font-medium text-gray-300 mb-1">
-                                        ID do Bloco de Anúncios (Ad Slot ID)
-                                    </label>
-                                    <input
-                                        id="ad-slot-id"
-                                        type="text"
-                                        placeholder="Ex: 1234567890"
-                                        value={settings.adMobSlotId || ''}
-                                        onChange={e => onSettingsChange({ ...settings, adMobSlotId: e.target.value })}
-                                        className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-1.5 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
-                                    />
-                                </div>
-
-                                <div className="p-2.5 rounded bg-blue-950/40 border border-blue-800/50 text-[11px] text-blue-300 space-y-1">
-                                    <p className="font-semibold text-blue-200">Requisitos para veicular anúncios reais:</p>
-                                    <ul className="list-disc pl-4 space-y-0.5 text-blue-300/90">
-                                        <li>Conta ativa e aprovada no Google AdSense.</li>
-                                        <li>Domínio público adicionado e verificado no painel do AdSense.</li>
-                                        <li>Enquanto em ambiente de teste ou sem IDs, exibimos banners demonstrativos.</li>
-                                    </ul>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </main>

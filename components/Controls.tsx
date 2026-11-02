@@ -14,6 +14,7 @@ interface ControlsProps {
   onOpenSettings: () => void;
   onGenerateSummary: () => void;
   hasConversation: boolean;
+  onInterrupt?: () => void;
 }
 
 export const Controls: React.FC<ControlsProps> = ({
@@ -28,6 +29,7 @@ export const Controls: React.FC<ControlsProps> = ({
   onOpenSettings,
   onGenerateSummary,
   hasConversation,
+  onInterrupt,
 }) => {
   const [inputValue, setInputValue] = useState('');
 
@@ -41,6 +43,27 @@ export const Controls: React.FC<ControlsProps> = ({
 
   return (
     <div className="p-2 sm:p-3 md:p-4 bg-gray-900/90 border-t border-gray-800">
+      {/* Speaking status and interrupt button */}
+      {isSpeaking && (
+        <div className="mb-2 flex items-center justify-between px-2.5 py-1 rounded-lg bg-cyan-950/80 border border-cyan-500/40 text-xs text-cyan-300 animate-fade-in">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+            </span>
+            <span className="font-medium">Vision falando...</span>
+          </div>
+          {onInterrupt && (
+            <button
+              onClick={onInterrupt}
+              className="px-2 py-0.5 rounded bg-cyan-800/80 hover:bg-cyan-700 text-cyan-100 text-[11px] font-semibold transition cursor-pointer"
+            >
+              Interromper
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center gap-1.5 sm:gap-2">
         <button
           onClick={toggleScreenSharing}

@@ -74,7 +74,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({ messages, is
             className={`flex animate-fade-in ${message.role === Role.USER ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-md p-3 rounded-lg text-sm transition-all duration-200 shadow-sm ${
+              className={`max-w-[92%] sm:max-w-xl md:max-w-2xl p-3 rounded-lg text-sm transition-all duration-200 shadow-sm break-words leading-relaxed ${
                 message.role === Role.USER
                   ? 'bg-blue-600 text-white rounded-br-none'
                   : 'bg-gray-700/90 text-gray-200 rounded-bl-none border border-gray-600/30'
@@ -86,7 +86,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({ messages, is
         ))}
         {isLoading && (
           <div className="flex justify-start animate-fade-in">
-            <div className="max-w-md p-3 rounded-lg bg-gray-700/90 text-gray-200 border border-gray-600/30 rounded-bl-none">
+            <div className="max-w-[92%] sm:max-w-md p-3 rounded-lg bg-gray-700/90 text-gray-200 border border-gray-600/30 rounded-bl-none">
               <LoadingIndicator />
             </div>
           </div>

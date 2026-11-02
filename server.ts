@@ -92,7 +92,16 @@ const responseSchema = {
 
 function initializeFirebaseAdmin() {
   if (getAdminApps().length) return getAdminAuth();
-  const projectId = process.env.FIREBASE_PROJECT_ID;
+  let projectId = process.env.FIREBASE_PROJECT_ID;
+  if (!projectId) {
+    try {
+      const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        projectId = config.projectId;
+      }
+    } catch {}
+  }
   const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (serviceAccountJson) {
     const serviceAccount = JSON.parse(serviceAccountJson);
@@ -143,6 +152,14 @@ async function createServer() {
       status: 'ok',
       hasApiKey: !!getApiKey(),
       timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Public Ad Configuration from project environment variables (never editable in client UI)
+  app.get('/api/ad-config', (req, res) => {
+    res.json({
+      publisherId: process.env.ADMOB_PUBLISHER_ID || process.env.VITE_ADMOB_PUBLISHER_ID || '',
+      slotId: process.env.ADMOB_SLOT_ID || process.env.VITE_ADMOB_SLOT_ID || '',
     });
   });
 

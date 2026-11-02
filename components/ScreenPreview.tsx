@@ -574,22 +574,22 @@ export const ScreenPreview: React.FC<ScreenPreviewProps> = ({
           </div>
         ) : (
           /* Empty State: Ready to Share Screen or Snap Photo */
-          <div className="flex flex-col items-center justify-center p-6 text-center max-w-md">
-            <div className="w-16 h-16 rounded-2xl bg-gray-900 border border-gray-800 flex items-center justify-center text-cyan-400 mb-4 shadow-xl">
+          <div className="flex flex-col items-center justify-center p-3 sm:p-6 text-center w-full max-w-lg mx-auto my-auto overflow-y-auto">
+            <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-2xl bg-gray-900 border border-gray-800 flex items-center justify-center text-cyan-400 mb-2 sm:mb-4 shadow-xl shrink-0">
               <ScreenIcon />
             </div>
 
-            <h3 className="text-base font-bold text-gray-100 mb-1">
+            <h3 className="text-sm sm:text-base font-bold text-gray-100 mb-1 leading-tight">
               Pronto para Orientação Visual
             </h3>
-            <p className="text-xs text-gray-400 mb-5 leading-relaxed">
-              Compartilhe sua tela ou tire uma foto. O assistente analisará o que você vê e desenhará setas, círculos e passos passo a passo.
+            <p className="text-[11px] sm:text-xs text-gray-400 mb-4 leading-relaxed max-w-sm">
+              Compartilhe sua tela ou envie uma captura. O assistente analisará o que você vê e desenhará setas, círculos e passos passo a passo.
             </p>
 
-            <div className="flex flex-wrap items-center justify-center gap-2">
+            <div className="flex flex-wrap items-center justify-center gap-2 w-full">
               <button
                 onClick={() => onStartScreenShare('screen')}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-semibold shadow-lg shadow-cyan-500/20 transition cursor-pointer flex items-center gap-1.5"
+                className="px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-semibold shadow-lg shadow-cyan-500/20 transition cursor-pointer flex items-center gap-1.5"
               >
                 <ScreenIcon />
                 <span>Compartilhar Tela</span>
@@ -597,7 +597,7 @@ export const ScreenPreview: React.FC<ScreenPreviewProps> = ({
 
               <button
                 onClick={() => onStartScreenShare('camera')}
-                className="px-3.5 py-2 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-semibold border border-gray-700 transition cursor-pointer flex items-center gap-1.5"
+                className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-semibold border border-gray-700 transition cursor-pointer flex items-center gap-1.5"
               >
                 <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -607,7 +607,7 @@ export const ScreenPreview: React.FC<ScreenPreviewProps> = ({
 
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="px-3.5 py-2 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium border border-gray-700 transition cursor-pointer flex items-center gap-1.5"
+                className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium border border-gray-700 transition cursor-pointer flex items-center gap-1.5"
               >
                 <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -616,7 +616,7 @@ export const ScreenPreview: React.FC<ScreenPreviewProps> = ({
               </button>
             </div>
 
-            <p className="mt-4 text-[11px] text-gray-500">
+            <p className="mt-3 text-[10px] sm:text-[11px] text-gray-500 hidden sm:block">
               Dica: você também pode colar uma imagem da área de transferência pressionando <kbd className="px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-gray-300">Ctrl+V</kbd>
             </p>
           </div>

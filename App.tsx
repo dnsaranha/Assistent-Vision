@@ -34,29 +34,40 @@ const App: React.FC = () => {
   const [visualGuides, setVisualGuides] = useState<VisualGuide[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // Screen width detection for responsive split (desktop: side-by-side, mobile: top-bottom)
-  const [isDesktop, setIsDesktop] = useState<boolean>(() => {
-    return typeof window !== 'undefined' ? window.innerWidth >= 768 : true;
+  // Screen aspect & width detection for responsive split (desktop/landscape: side-by-side, mobile/portrait: top-bottom)
+  const [isRowLayout, setIsRowLayout] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    return window.innerWidth >= 768 && window.innerWidth >= window.innerHeight;
   });
 
   useEffect(() => {
     const handleResize = () => {
-      setIsDesktop(window.innerWidth >= 768);
+      const isWide = window.innerWidth >= 768 && window.innerWidth >= window.innerHeight;
+      setIsRowLayout(isWide);
     };
+    handleResize();
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
   }, []);
 
-  // Resizable split state: screen preview ratio (between 0.20 and 0.85)
+  // Resizable split state: screen preview ratio (between 0.18 and 0.82)
   const [splitRatio, setSplitRatio] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('visionSplitRatio');
-      if (saved) return parseFloat(saved);
+      if (saved) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed) && parsed >= 0.18 && parsed <= 0.82) return parsed;
+      }
     } catch (e) {}
-    return 0.55; // default 55% screen preview
+    return 0.50; // default 50/50 clean balanced layout
   });
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
   const mainContainerRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
 
   const [settings, setSettings] = useState<Settings>({
     micSensitivity: 1.0,
@@ -65,8 +76,6 @@ const App: React.FC = () => {
     shareSystemAudio: false,
     systemInstruction: DEFAULT_SYSTEM_INSTRUCTION,
     liveSystemInstruction: DEFAULT_LIVE_SYSTEM_INSTRUCTION,
-    adMobPublisherId: '',
-    adMobSlotId: '',
   });
 
   useEffect(() => {
@@ -79,8 +88,6 @@ const App: React.FC = () => {
           ...loaded,
           systemInstruction: loaded.systemInstruction || DEFAULT_SYSTEM_INSTRUCTION,
           liveSystemInstruction: loaded.liveSystemInstruction || DEFAULT_LIVE_SYSTEM_INSTRUCTION,
-          adMobPublisherId: loaded.adMobPublisherId || '',
-          adMobSlotId: loaded.adMobSlotId || '',
         }));
       }
     } catch (e) {
@@ -119,8 +126,10 @@ const App: React.FC = () => {
 
   const {
     isLive,
+    isSpeaking,
     startConversation,
     stopConversation,
+    interruptSpeech,
     liveMessages,
     micVolume,
   } = useLiveConversation({
@@ -135,43 +144,78 @@ const App: React.FC = () => {
     onApiKeyError: handleApiKeyError,
   });
 
-  // Drag and drop resizable splitter logic
-  const handleSplitPointerDown = (e: React.PointerEvent) => {
+  // Rock-solid drag and drop resizable splitter logic with Pointer Capture
+  const handleSplitPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
     setIsDraggingSplit(true);
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    isDraggingRef.current = true;
   };
 
-  const handleSplitPointerMove = (e: React.PointerEvent) => {
-    if (!isDraggingSplit || !mainContainerRef.current) return;
+  const updateSplitFromPointer = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!mainContainerRef.current) return;
+      const rect = mainContainerRef.current.getBoundingClientRect();
+      let newRatio: number;
 
-    const rect = mainContainerRef.current.getBoundingClientRect();
+      if (isRowLayout) {
+        newRatio = (clientX - rect.left) / rect.width;
+      } else {
+        newRatio = (clientY - rect.top) / rect.height;
+      }
 
-    let newRatio: number;
-    if (isDesktop) {
-      const clientX = e.clientX - rect.left;
-      newRatio = clientX / rect.width;
-    } else {
-      const clientY = e.clientY - rect.top;
-      newRatio = clientY / rect.height;
-    }
+      // Smoothly clamp between 18% and 82%
+      const clamped = Math.max(0.18, Math.min(0.82, newRatio));
+      setSplitRatio(clamped);
+    },
+    [isRowLayout]
+  );
 
-    // Clamp between 20% and 80%
-    const clamped = Math.max(0.2, Math.min(0.8, newRatio));
-    setSplitRatio(clamped);
+  const handleSplitPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current) return;
+    updateSplitFromPointer(e.clientX, e.clientY);
   };
 
-  const handleSplitPointerUp = (e: React.PointerEvent) => {
-    if (isDraggingSplit) {
+  const handleSplitPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+    isDraggingRef.current = false;
+    setIsDraggingSplit(false);
+    try {
+      localStorage.setItem('visionSplitRatio', splitRatio.toString());
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (!isDraggingSplit) return;
+
+    const handleWindowPointerMove = (e: PointerEvent) => {
+      if (!isDraggingRef.current) return;
+      updateSplitFromPointer(e.clientX, e.clientY);
+    };
+
+    const handleWindowPointerUp = () => {
+      isDraggingRef.current = false;
       setIsDraggingSplit(false);
       try {
         localStorage.setItem('visionSplitRatio', splitRatio.toString());
-      } catch (err) {}
-      try {
-        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch (err) {}
-    }
-  };
+      } catch {}
+    };
+
+    window.addEventListener('pointermove', handleWindowPointerMove, { passive: false });
+    window.addEventListener('pointerup', handleWindowPointerUp);
+    window.addEventListener('pointercancel', handleWindowPointerUp);
+
+    return () => {
+      window.removeEventListener('pointermove', handleWindowPointerMove);
+      window.removeEventListener('pointerup', handleWindowPointerUp);
+      window.removeEventListener('pointercancel', handleWindowPointerUp);
+    };
+  }, [isDraggingSplit, updateSplitFromPointer, splitRatio]);
 
   const handleSetPresetRatio = (ratio: number) => {
     setSplitRatio(ratio);
@@ -398,40 +442,47 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-1">
             <button
-              onClick={() => handleSetPresetRatio(0.35)}
+              onClick={() => handleSetPresetRatio(0.30)}
               className={`px-2 py-0.5 rounded text-[10px] transition cursor-pointer ${
-                screenPercentage === 35 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+                screenPercentage === 30 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
               }`}
-              title="Tela compacta (35%)"
+              title="Tela compacta (30%)"
             >
-              35%
+              30%
             </button>
             <button
-              onClick={() => handleSetPresetRatio(0.58)}
+              onClick={() => handleSetPresetRatio(0.50)}
               className={`px-2 py-0.5 rounded text-[10px] transition cursor-pointer ${
-                screenPercentage === 58 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+                screenPercentage === 50 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
               }`}
-              title="Equilibrado (58%)"
+              title="Equilibrado (50%)"
             >
-              58%
+              50%
             </button>
             <button
-              onClick={() => handleSetPresetRatio(0.75)}
+              onClick={() => handleSetPresetRatio(0.70)}
               className={`px-2 py-0.5 rounded text-[10px] transition cursor-pointer ${
-                screenPercentage === 75 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+                screenPercentage === 70 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
               }`}
-              title="Visão ampla (75%)"
+              title="Visão ampla (70%)"
             >
-              75%
+              70%
             </button>
             <button
               onClick={() => handleSetPresetRatio(0.85)}
               className={`px-2 py-0.5 rounded text-[10px] transition cursor-pointer ${
                 screenPercentage === 85 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
               }`}
-              title="Visão máxima (85%)"
+              title="Foco total (85%)"
             >
               85%
+            </button>
+            <button
+              onClick={() => handleSetPresetRatio(screenPercentage > 80 ? 0.50 : 0.85)}
+              className="px-2 py-0.5 rounded text-[10px] bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/30 transition cursor-pointer font-medium ml-1"
+              title={screenPercentage > 80 ? "Restaurar layout equilibrado" : "Expandir visão"}
+            >
+              {screenPercentage > 80 ? "Restaurar" : "Expandir"}
             </button>
           </div>
         </div>
@@ -439,31 +490,38 @@ const App: React.FC = () => {
         {/* Main Work Area with Draggable Resizable Split Pane */}
         <main
           ref={mainContainerRef}
-          onPointerMove={handleSplitPointerMove}
-          onPointerUp={handleSplitPointerUp}
-          className={`flex-1 flex flex-col md:flex-row overflow-hidden relative ${
-            isDraggingSplit ? 'select-none cursor-col-resize md:cursor-col-resize' : ''
+          style={{ flexDirection: isRowLayout ? 'row' : 'column' }}
+          className={`flex-1 flex w-full overflow-hidden relative select-none ${
+            isDraggingSplit ? (isRowLayout ? 'cursor-col-resize' : 'cursor-row-resize') : ''
           }`}
         >
+          {/* Transparent Overlay during dragging to prevent iframes/videos from stealing pointer events */}
+          {isDraggingSplit && (
+            <div
+              className={`fixed inset-0 z-50 ${isRowLayout ? 'cursor-col-resize' : 'cursor-row-resize'}`}
+              style={{ userSelect: 'none', pointerEvents: 'auto' }}
+            />
+          )}
+
           {/* Pane 1: Screen & Vision Monitor */}
           <div
             style={
-              isDesktop
+              isRowLayout
                 ? {
+                    flex: `0 0 ${screenPercentage}%`,
                     width: `${screenPercentage}%`,
-                    flexBasis: `${screenPercentage}%`,
-                    minWidth: '280px',
-                    maxWidth: '85%',
+                    maxWidth: '82%',
+                    minWidth: '18%',
                   }
                 : {
+                    flex: `0 0 ${screenPercentage}%`,
                     height: `${screenPercentage}%`,
-                    flexBasis: `${screenPercentage}%`,
-                    minHeight: '190px',
-                    maxHeight: '78%',
+                    maxHeight: '82%',
+                    minHeight: '18%',
                   }
             }
-            className={`w-full max-w-full flex flex-col overflow-hidden transition-all duration-75 ${
-              isDesktop ? 'h-full p-2 md:p-3' : 'p-1.5 sm:p-2 shrink-0'
+            className={`flex flex-col min-w-0 min-h-0 overflow-hidden shrink-0 ${
+              isRowLayout ? 'h-full p-2 md:p-3' : 'w-full p-1.5 sm:p-2'
             }`}
           >
             <ScreenPreview
@@ -482,49 +540,34 @@ const App: React.FC = () => {
             />
           </div>
 
-          {/* Draggable Divider Handle */}
+          {/* Draggable Divider Handle (Rock-solid with Pointer Capture - NEVER escapes) */}
           <div
             onPointerDown={handleSplitPointerDown}
-            className={`group relative flex items-center justify-center shrink-0 z-20 transition-colors duration-150 ${
-              isDesktop ? 'cursor-col-resize h-full w-2.5' : 'cursor-row-resize w-full h-3'
-            } ${
-              isDraggingSplit
-                ? 'bg-cyan-500 shadow-lg shadow-cyan-500/50'
-                : 'bg-gray-800/90 hover:bg-cyan-500/80 active:bg-cyan-500'
-            }`}
-            title={
-              isDesktop
-                ? 'Arraste para redimensionar largura da tela'
-                : 'Arraste para redimensionar altura da tela'
-            }
+            onPointerMove={handleSplitPointerMove}
+            onPointerUp={handleSplitPointerUp}
+            className={`group relative flex items-center justify-center shrink-0 z-20 touch-none select-none transition-colors ${
+              isRowLayout
+                ? 'cursor-col-resize h-full w-4 py-2 hover:bg-cyan-500/20 active:bg-cyan-500/40'
+                : 'cursor-row-resize w-full h-5 px-2 hover:bg-cyan-500/20 active:bg-cyan-500/40'
+            } ${isDraggingSplit ? 'bg-cyan-500/30' : 'bg-gray-900 border-gray-800'}`}
+            title="Arraste para redimensionar a divisão da tela"
           >
             {/* Grip Handle Indicator */}
-            <div className="flex items-center justify-center">
+            <div className="flex items-center justify-center pointer-events-none">
               <div
                 className={`rounded-full transition-all duration-150 ${
-                  isDraggingSplit ? 'bg-white scale-110' : 'bg-gray-400 group-hover:bg-white'
-                } ${isDesktop ? 'w-1 h-8' : 'w-12 h-1'}`}
+                  isDraggingSplit
+                    ? 'bg-cyan-400 scale-125 shadow-lg shadow-cyan-500/60'
+                    : 'bg-gray-500 group-hover:bg-cyan-400'
+                } ${isRowLayout ? 'w-1.5 h-12' : 'w-16 h-1.5'}`}
               />
             </div>
           </div>
 
-          {/* Pane 2: Conversation View & Controls */}
+          {/* Pane 2: Conversation View & Controls (Fills 100% of remaining space - never clips) */}
           <div
-            style={
-              isDesktop
-                ? {
-                    width: `${chatPercentage}%`,
-                    flexBasis: `${chatPercentage}%`,
-                    minWidth: '280px',
-                  }
-                : {
-                    height: `${chatPercentage}%`,
-                    flexBasis: `${chatPercentage}%`,
-                    minHeight: '180px',
-                  }
-            }
-            className={`w-full max-w-full flex flex-col flex-1 min-w-0 bg-gray-900/40 overflow-hidden ${
-              isDesktop ? 'h-full' : ''
+            className={`flex-1 flex flex-col min-w-0 min-h-0 bg-gray-900/40 overflow-hidden ${
+              isRowLayout ? 'h-full' : 'w-full'
             }`}
           >
             <ConversationView messages={currentMessages} isLoading={currentLoadingState} />
@@ -535,7 +578,8 @@ const App: React.FC = () => {
               isSharing={isSharing}
               toggleScreenSharing={handleToggleScreenSharing}
               isLoading={isLoading}
-              isSpeaking={false}
+              isSpeaking={isSpeaking}
+              onInterrupt={interruptSpeech}
               micVolume={micVolume}
               onOpenSettings={() => setIsSettingsOpen(true)}
               onGenerateSummary={handleGenerateSummary}
@@ -543,24 +587,57 @@ const App: React.FC = () => {
             />
           </div>
 
-          {/* Floating error notification */}
+          {/* Floating error notification with retry button for mic permission */}
           {error && (
-            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-red-600/95 text-white text-xs font-semibold shadow-2xl backdrop-blur-md border border-red-400 flex items-center gap-2 animate-bounce-short">
-              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <span>{error}</span>
-              <button onClick={() => setError(null)} className="ml-2 hover:opacity-75">✕</button>
+            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 max-w-[92vw] sm:max-w-lg px-4 py-3 rounded-xl bg-red-900/95 text-white text-xs font-medium shadow-2xl backdrop-blur-md border border-red-500 flex items-start sm:items-center justify-between gap-3 animate-fade-in">
+              <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                <svg className="w-5 h-5 text-red-300 shrink-0 mt-0.5 sm:mt-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-red-100 leading-tight">Aviso do Sistema</p>
+                  <p className="text-red-200 mt-0.5 text-[11px] leading-relaxed break-words">{error}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap justify-end">
+                {error.includes('Nova Aba') && (
+                  <a
+                    href={typeof window !== 'undefined' ? window.location.href : '#'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-[11px] transition inline-flex items-center gap-1 shadow"
+                  >
+                    <span>Abrir Nova Aba</span>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </a>
+                )}
+                {(error.toLowerCase().includes('microfone') || error.toLowerCase().includes('permissão')) && (
+                  <button
+                    onClick={() => {
+                      setError(null);
+                      handleToggleLiveSession();
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-white font-semibold text-[11px] transition cursor-pointer"
+                  >
+                    Tentar Novamente
+                  </button>
+                )}
+                <button
+                  onClick={() => setError(null)}
+                  className="p-1 rounded text-red-300 hover:text-white hover:bg-red-800/60 transition cursor-pointer"
+                  title="Fechar aviso"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           )}
         </main>
 
-        {/* AdMob Bottom Advertising Bar */}
-        <AdBanner
-          publisherId={settings.adMobPublisherId}
-          slotId={settings.adMobSlotId}
-          onConfigure={() => setIsSettingsOpen(true)}
-        />
+        {/* AdMob Bottom Advertising Bar (Configured via project secret environment variables) */}
+        <AdBanner />
       </div>
 
       {/* Settings Modal */}

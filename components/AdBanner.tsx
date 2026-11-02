@@ -47,28 +47,44 @@ const AD_ROTATION: AdItem[] = [
 interface AdBannerProps {
   publisherId?: string;
   slotId?: string;
-  onConfigure?: () => void;
 }
 
 export const AdBanner: React.FC<AdBannerProps> = ({
-  publisherId,
-  slotId,
-  onConfigure,
+  publisherId: propPublisherId,
+  slotId: propSlotId,
 }) => {
   const [currentAdIndex, setCurrentAdIndex] = useState(0);
   const [isDismissed, setIsDismissed] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [adLoaded, setAdLoaded] = useState(false);
+  const [serverPublisherId, setServerPublisherId] = useState<string>('');
+  const [serverSlotId, setServerSlotId] = useState<string>('');
+
+  // Fetch project-level ad configuration from backend
+  useEffect(() => {
+    fetch('/api/ad-config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.publisherId) setServerPublisherId(data.publisherId);
+        if (data?.slotId) setServerSlotId(data.slotId);
+      })
+      .catch((err) => {
+        console.debug('Ad config fetch:', err);
+      });
+  }, []);
+
+  const activePublisherId = propPublisherId || serverPublisherId;
+  const activeSlotId = propSlotId || serverSlotId;
 
   // Load real AdSense script if publisherId is provided
   useEffect(() => {
-    if (!publisherId) return;
+    if (!activePublisherId) return;
 
     const scriptId = 'google-adsense-script';
     if (!document.getElementById(scriptId)) {
       const script = document.createElement('script');
       script.id = scriptId;
-      script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${publisherId}`;
+      script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${activePublisherId}`;
       script.async = true;
       script.crossOrigin = 'anonymous';
       script.onload = () => {
@@ -81,16 +97,16 @@ export const AdBanner: React.FC<AdBannerProps> = ({
       };
       document.head.appendChild(script);
     }
-  }, [publisherId]);
+  }, [activePublisherId]);
 
   // Rotate demo ads every 20 seconds
   useEffect(() => {
-    if (isDismissed || isHovered || (publisherId && slotId)) return;
+    if (isDismissed || isHovered || (activePublisherId && activeSlotId)) return;
     const interval = setInterval(() => {
       setCurrentAdIndex((prev) => (prev + 1) % AD_ROTATION.length);
     }, 20000);
     return () => clearInterval(interval);
-  }, [isDismissed, isHovered, publisherId, slotId]);
+  }, [isDismissed, isHovered, activePublisherId, activeSlotId]);
 
   if (isDismissed) {
     return (
@@ -118,14 +134,14 @@ export const AdBanner: React.FC<AdBannerProps> = ({
       className="w-full bg-gradient-to-r from-gray-900 via-gray-900 to-gray-950 border-t border-gray-800 shadow-xl transition-all duration-300 select-none z-30"
     >
       <div className="max-w-7xl mx-auto px-2 sm:px-4 py-1.5 sm:py-2 flex flex-col sm:flex-row items-center justify-between gap-2">
-        {publisherId && slotId ? (
+        {activePublisherId && activeSlotId ? (
           <div className="w-full flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 shrink-0">
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                 Google AdSense Ativo
               </span>
               <span className="text-[10px] text-gray-400 font-mono hidden md:inline">
-                {publisherId}
+                {activePublisherId}
               </span>
             </div>
 
@@ -133,25 +149,14 @@ export const AdBanner: React.FC<AdBannerProps> = ({
               <ins
                 className="adsbygoogle"
                 style={{ display: 'inline-block', width: '100%', maxWidth: '728px', height: '50px' }}
-                data-ad-client={publisherId}
-                data-ad-slot={slotId}
+                data-ad-client={activePublisherId}
+                data-ad-slot={activeSlotId}
                 data-ad-format="horizontal"
                 data-full-width-responsive="true"
               />
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
-              {onConfigure && (
-                <button
-                  onClick={onConfigure}
-                  title="Configurar AdSense / AdMob"
-                  className="text-gray-400 hover:text-cyan-400 p-1 rounded hover:bg-gray-800 cursor-pointer"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  </svg>
-                </button>
-              )}
               <button
                 onClick={() => setIsDismissed(true)}
                 title="Minimizar publicidade"
@@ -203,20 +208,6 @@ export const AdBanner: React.FC<AdBannerProps> = ({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                 </svg>
               </a>
-
-              {/* Configure button */}
-              {onConfigure && (
-                <button
-                  onClick={onConfigure}
-                  title="Configurar Publisher ID do Google AdSense / AdMob"
-                  className="text-gray-400 hover:text-cyan-400 p-1 rounded hover:bg-gray-800 flex items-center gap-1 text-[11px] cursor-pointer"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  </svg>
-                  <span className="hidden xl:inline text-[10px]">Configurar</span>
-                </button>
-              )}
 
               {/* AdChoices Info Icon */}
               <a
