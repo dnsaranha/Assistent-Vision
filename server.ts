@@ -301,7 +301,7 @@ async function createServer() {
 
   // WebSocket Server for Live API Proxy
   const wss = new WebSocketServer({ noServer: true, maxPayload: 5 * 1024 * 1024 });
-  const activeUsers = new Set<string>();
+  const activeUserSessions = new Map<string, { ws: WebSocket; liveSession: any }>();
 
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = parseUrl(request.url || '');
@@ -325,7 +325,7 @@ async function createServer() {
     let liveSession: any = null;
     let isClosed = false;
     let authenticatedUid: string | null = null;
-    let authTimeout: NodeJS.Timeout | null = setTimeout(() => ws.close(4401, 'Authentication timeout'), 5000);
+    let authTimeout: NodeJS.Timeout | null = setTimeout(() => ws.close(4401, 'Authentication timeout'), 6000);
 
     ws.on('message', async (data) => {
       try {
@@ -341,14 +341,20 @@ async function createServer() {
             authenticatedUid = decoded.uid;
             if (authTimeout) clearTimeout(authTimeout);
             authTimeout = null;
-            if (activeUsers.has(authenticatedUid)) {
-              ws.close(4429, 'Live session already active');
-              authenticatedUid = null;
-              return;
+
+            // If user already had a previous active socket, close it gracefully to allow new connection
+            const existing = activeUserSessions.get(authenticatedUid);
+            if (existing && existing.ws !== ws) {
+              try {
+                if (existing.liveSession) existing.liveSession.close();
+                existing.ws.close(1000, 'Replaced by new live session');
+              } catch {}
             }
-            activeUsers.add(authenticatedUid);
+            activeUserSessions.set(authenticatedUid, { ws, liveSession: null });
+
             ws.send(JSON.stringify({ type: 'authenticated' }));
-          } catch {
+          } catch (authErr: any) {
+            console.warn("WebSocket token verification failed:", authErr?.message || authErr);
             ws.close(4401, 'Invalid authentication');
           }
           return;
@@ -368,7 +374,8 @@ async function createServer() {
 
           const ai = new GoogleGenAI({ apiKey });
 
-          const liveModel = payload.model || 'gemini-2.5-flash-native-audio-preview-12-2025';
+          // Official Gemini Live API model per guidelines
+          const liveModel = payload.model || 'gemini-3.8-live';
           const voiceModel = payload.voiceModel || 'Zephyr';
           const systemInstruction = payload.systemInstruction || '';
 
@@ -400,7 +407,7 @@ async function createServer() {
                 }
               },
               onerror: (err: any) => {
-                console.error("Server Live session error:", err);
+                console.warn("Live session error from Gemini:", err?.message || err);
                 if (!isClosed && ws.readyState === WebSocket.OPEN) {
                   ws.send(JSON.stringify({
                     type: 'session_error',
@@ -410,6 +417,10 @@ async function createServer() {
               },
             },
           });
+
+          if (authenticatedUid && activeUserSessions.has(authenticatedUid)) {
+            activeUserSessions.set(authenticatedUid, { ws, liveSession });
+          }
         } else if (payload.type === 'realtime_input' && liveSession) {
           if (payload.input && typeof payload.input === 'object') liveSession.sendRealtimeInput(payload.input);
         } else if (payload.type === 'stop') {
@@ -431,7 +442,12 @@ async function createServer() {
     const cleanup = () => {
       isClosed = true;
       if (authTimeout) clearTimeout(authTimeout);
-      if (authenticatedUid) activeUsers.delete(authenticatedUid);
+      if (authenticatedUid) {
+        const cur = activeUserSessions.get(authenticatedUid);
+        if (cur?.ws === ws) {
+          activeUserSessions.delete(authenticatedUid);
+        }
+      }
       if (liveSession) {
         try {
           liveSession.close();

@@ -11,6 +11,7 @@ import { SettingsModal, Settings } from './components/SettingsModal';
 import { LoginGate } from './components/LoginGate';
 import { Header } from './components/Header';
 import { AdBanner } from './components/AdBanner';
+import { MicPermissionModal } from './components/MicPermissionModal';
 
 const DEFAULT_SYSTEM_INSTRUCTION =
   "Você é o Vision, um assistente de IA especialista em produtividade e orientação visual interativa na tela. Suas capacidades principais são:\n1. Orientação Visual na Tela com Desenhos: Quando o usuário pedir ajuda para encontrar botões, campos, opções ou realizar uma tarefa, responda em `response_text` e utilize o array `visual_guides` para desenhar na tela:\n- 'number_badge': Desenhe círculos numerados (1, 2, 3...) nas posições x, y e use o campo `label` para descrever a ação (ex: 'Passo 1: Clicar em Arquivo').\n- 'arrow': Aponte setas (startX, startY até endX, endY) indicando o local exato com `label` explicativo.\n- 'circle': Desenhe círculos com raio e cor destacando botões ou ícones.\n- 'rect': Desenhe retângulos delimitando caixas, menus ou tabelas (x, y, width, height e label).\n- 'text': Escreva notas ou anotações flutuantes explicativas na tela.\n2. Roteiro Passo a Passo: Ordene os number_badges sequencialmente para formar um guia passo a passo completo.\n3. Código e Solução de Erros: Analise erros, depure telas e mostre onde corrigir.\nSe não for uma pergunta visual ou não precisar de desenho, retorne `visual_guides` vazio.";
@@ -33,6 +34,7 @@ const App: React.FC = () => {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [visualGuides, setVisualGuides] = useState<VisualGuide[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMicModalOpen, setIsMicModalOpen] = useState(false);
 
   // Screen aspect & width detection for responsive split (desktop/landscape: side-by-side, mobile/portrait: top-bottom)
   const [isRowLayout, setIsRowLayout] = useState<boolean>(() => {
@@ -614,15 +616,26 @@ const App: React.FC = () => {
                   </a>
                 )}
                 {(error.toLowerCase().includes('microfone') || error.toLowerCase().includes('permissão')) && (
-                  <button
-                    onClick={() => {
-                      setError(null);
-                      handleToggleLiveSession();
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-white font-semibold text-[11px] transition cursor-pointer"
-                  >
-                    Tentar Novamente
-                  </button>
+                  <>
+                    <button
+                      onClick={() => setIsMicModalOpen(true)}
+                      className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-[11px] transition cursor-pointer shadow flex items-center gap-1"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span>Como Liberar</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setError(null);
+                        handleToggleLiveSession();
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-white font-semibold text-[11px] transition cursor-pointer"
+                    >
+                      Tentar Novamente
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={() => setError(null)}
@@ -646,6 +659,16 @@ const App: React.FC = () => {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onSettingsChange={handleSettingsChange}
+      />
+
+      {/* Microphone Permission Guide & Real-Time Test Modal */}
+      <MicPermissionModal
+        isOpen={isMicModalOpen}
+        onClose={() => setIsMicModalOpen(false)}
+        onRetryStart={() => {
+          setError(null);
+          handleToggleLiveSession();
+        }}
       />
     </>
   );

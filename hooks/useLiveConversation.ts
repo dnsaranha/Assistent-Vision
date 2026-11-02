@@ -264,6 +264,13 @@ function initOutputAudioContext(deviceId?: string): AudioContext {
       };
       visualize();
 
+      if (audioContextRef.current?.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+      if (outputAudioContextRef.current?.state === 'suspended') {
+        await outputAudioContextRef.current.resume();
+      }
+
       setIsLive(true);
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -290,7 +297,7 @@ function initOutputAudioContext(deviceId?: string): AudioContext {
               type: 'start',
               systemInstruction,
               voiceModel,
-              model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+              model: 'gemini-3.8-live',
             }));
           } else if (payload.type === 'session_open') {
             // Audio streaming from microphone to server
@@ -453,12 +460,19 @@ function initOutputAudioContext(deviceId?: string): AudioContext {
       };
 
       socket.onerror = (e) => {
-        console.error("WebSocket connection error:", e);
+        console.warn("WebSocket live audio error:", e);
         onError("Não foi possível conectar ao servidor para a conversa em tempo real.");
         cleanup();
       };
 
-      socket.onclose = () => {
+      socket.onclose = (event) => {
+        if (event.code === 4401) {
+          onError("Sessão expirada. Faça login novamente com seu Gmail.");
+        } else if (event.code === 4429) {
+          onError("Uma sessão de voz já estava ativa. Tentando reconectar...");
+        } else if (event.code !== 1000) {
+          console.debug("Live WebSocket closed:", event.code, event.reason);
+        }
         cleanup();
       };
     } catch (err: any) {
