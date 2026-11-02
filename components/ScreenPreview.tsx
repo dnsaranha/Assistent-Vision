@@ -2,6 +2,8 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ScreenIcon } from './Icons';
 import { Annotation, VisualGuide, GuideType } from '../types';
 import { CaptureType } from '../hooks/useScreenCapture';
+import { StepRoadmapDrawer, RoadmapStep } from './StepRoadmapDrawer';
+import { VisualGuideOverlay } from './VisualGuideOverlay';
 
 interface ScreenPreviewProps {
   stream: MediaStream | null;
@@ -79,7 +81,7 @@ export const ScreenPreview: React.FC<ScreenPreviewProps> = ({
   // Filter number badge guides to generate the assistant step-by-step roadmap
   const stepGuides = visualGuides
     .filter((g) => g.type === GuideType.NUMBER_BADGE)
-    .sort((a: any, b: any) => (a.number ?? 0) - (b.number ?? 0));
+    .sort((a: any, b: any) => (a.number ?? 0) - (b.number ?? 0)) as RoadmapStep[];
 
   const toggleStepCompleted = (stepNumber: number) => {
     setCompletedSteps((prev) => ({
@@ -286,290 +288,14 @@ export const ScreenPreview: React.FC<ScreenPreviewProps> = ({
 
             {/* SVG Visual Guides & Annotations Rendered Exclusively by AI Assistant */}
             {isShowingGuides && containerSize.width > 0 && containerSize.height > 0 && (
-              <svg
-                className="absolute inset-0 w-full h-full pointer-events-none z-10"
-                viewBox={`0 0 ${containerSize.width} ${containerSize.height}`}
-              >
-                <defs>
-                  <marker
-                    id="guide-arrow"
-                    viewBox="0 0 10 10"
-                    refX="7"
-                    refY="5"
-                    markerWidth="6"
-                    markerHeight="6"
-                    orient="auto-start-reverse"
-                  >
-                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38bdf8" />
-                  </marker>
-                  <marker
-                    id="guide-arrow-yellow"
-                    viewBox="0 0 10 10"
-                    refX="7"
-                    refY="5"
-                    markerWidth="6"
-                    markerHeight="6"
-                    orient="auto-start-reverse"
-                  >
-                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#fef08a" />
-                  </marker>
-                  <filter id="badge-glow" x="-20%" y="-20%" width="140%" height="140%">
-                    <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#000" floodOpacity="0.7" />
-                  </filter>
-                </defs>
-
-                {/* Detected Bounding Box Annotations */}
-                {annotations.map((ann, idx) => (
-                  <rect
-                    key={`ann-${idx}`}
-                    x={ann.x * containerSize.width}
-                    y={ann.y * containerSize.height}
-                    width={ann.width * containerSize.width}
-                    height={ann.height * containerSize.height}
-                    fill="rgba(56, 189, 248, 0.15)"
-                    stroke="#38bdf8"
-                    strokeWidth="2.5"
-                    strokeDasharray="6 4"
-                    rx="6"
-                  />
-                ))}
-
-                {/* AI Assistant Visual Guides */}
-                {visualGuides.map((guide, idx) => {
-                  const color = guide.color || '#38bdf8';
-                  const strokeWidth = (guide as any).strokeWidth || 3.5;
-
-                  switch (guide.type) {
-                    case GuideType.ARROW: {
-                      const sx = (guide.startX ?? (guide as any).x ?? 0.5) * containerSize.width;
-                      const sy = (guide.startY ?? (guide as any).y ?? 0.5) * containerSize.height;
-                      const ex = (guide.endX ?? ((guide as any).x ? (guide as any).x : 0.55)) * containerSize.width;
-                      const ey = (guide.endY ?? ((guide as any).y ? (guide as any).y : 0.55)) * containerSize.height;
-
-                      return (
-                        <g key={`guide-${idx}`}>
-                          <line
-                            x1={sx}
-                            y1={sy}
-                            x2={ex}
-                            y2={ey}
-                            stroke={color}
-                            strokeWidth={strokeWidth}
-                            strokeLinecap="round"
-                            markerEnd={color.includes('fef08a') ? 'url(#guide-arrow-yellow)' : 'url(#guide-arrow)'}
-                            filter="url(#badge-glow)"
-                          />
-                          {guide.label && (
-                            <g transform={`translate(${(sx + ex) / 2}, ${(sy + ey) / 2 - 14})`}>
-                              <rect
-                                x={-(guide.label.length * 4.5) - 6}
-                                y="-12"
-                                width={guide.label.length * 9 + 12}
-                                height="22"
-                                rx="5"
-                                fill="#0f172a"
-                                stroke={color}
-                                strokeWidth="1.5"
-                              />
-                              <text
-                                x="0"
-                                y="2"
-                                fill={color}
-                                fontSize="11"
-                                fontWeight="bold"
-                                textAnchor="middle"
-                              >
-                                {guide.label}
-                              </text>
-                            </g>
-                          )}
-                        </g>
-                      );
-                    }
-
-                    case GuideType.CIRCLE: {
-                      const cx = (guide.x ?? 0.5) * containerSize.width;
-                      const cy = (guide.y ?? 0.5) * containerSize.height;
-                      const r = (guide.radius || 0.05) * Math.min(containerSize.width, containerSize.height);
-
-                      return (
-                        <g key={`guide-${idx}`}>
-                          <circle
-                            cx={cx}
-                            cy={cy}
-                            r={r}
-                            fill={guide.fill ? `${color}33` : 'none'}
-                            stroke={color}
-                            strokeWidth={strokeWidth}
-                            strokeDasharray={guide.fill ? 'none' : '4 3'}
-                            filter="url(#badge-glow)"
-                          />
-                          {guide.label && (
-                            <g transform={`translate(${cx}, ${cy - r - 12})`}>
-                              <rect
-                                x={-(guide.label.length * 4.5) - 6}
-                                y="-10"
-                                width={guide.label.length * 9 + 12}
-                                height="20"
-                                rx="4"
-                                fill="#0f172a"
-                                stroke={color}
-                                strokeWidth="1"
-                              />
-                              <text
-                                x="0"
-                                y="4"
-                                fill={color}
-                                fontSize="11"
-                                fontWeight="bold"
-                                textAnchor="middle"
-                              >
-                                {guide.label}
-                              </text>
-                            </g>
-                          )}
-                        </g>
-                      );
-                    }
-
-                    case GuideType.RECT: {
-                      const rx = (guide.x ?? 0.1) * containerSize.width;
-                      const ry = (guide.y ?? 0.1) * containerSize.height;
-                      const rw = (guide.width || 0.2) * containerSize.width;
-                      const rh = (guide.height || 0.1) * containerSize.height;
-
-                      return (
-                        <g key={`guide-${idx}`}>
-                          <rect
-                            x={rx}
-                            y={ry}
-                            width={rw}
-                            height={rh}
-                            fill={guide.fill ? `${color}25` : 'rgba(56, 189, 248, 0.08)'}
-                            stroke={color}
-                            strokeWidth={strokeWidth}
-                            rx="6"
-                            filter="url(#badge-glow)"
-                          />
-                          {guide.label && (
-                            <g transform={`translate(${rx + 8}, ${ry - 12})`}>
-                              <rect
-                                x="-4"
-                                y="-10"
-                                width={guide.label.length * 8 + 12}
-                                height="20"
-                                rx="4"
-                                fill="#0f172a"
-                                stroke={color}
-                                strokeWidth="1"
-                              />
-                              <text
-                                x="2"
-                                y="4"
-                                fill={color}
-                                fontSize="11"
-                                fontWeight="bold"
-                              >
-                                {guide.label}
-                              </text>
-                            </g>
-                          )}
-                        </g>
-                      );
-                    }
-
-                    case GuideType.NUMBER_BADGE: {
-                      const bx = (guide.x ?? 0.5) * containerSize.width;
-                      const by = (guide.y ?? 0.5) * containerSize.height;
-                      const isDone = completedSteps[guide.number];
-
-                      return (
-                        <g
-                          key={`guide-${idx}`}
-                          className="pointer-events-auto cursor-pointer"
-                          onClick={() => toggleStepCompleted(guide.number)}
-                          filter="url(#badge-glow)"
-                        >
-                          <circle
-                            cx={bx}
-                            cy={by}
-                            r="17"
-                            fill={isDone ? '#10b981' : '#f59e0b'}
-                            stroke="#ffffff"
-                            strokeWidth="2.5"
-                          />
-                          <text
-                            x={bx}
-                            y={by + 5}
-                            fill="#ffffff"
-                            fontSize="13"
-                            fontWeight="bold"
-                            textAnchor="middle"
-                          >
-                            {isDone ? '✓' : guide.number}
-                          </text>
-                          {guide.label && (
-                            <g transform={`translate(${bx + 24}, ${by + 4})`}>
-                              <rect
-                                x="-4"
-                                y="-12"
-                                width={guide.label.length * 8 + 14}
-                                height="22"
-                                rx="5"
-                                fill="#0f172a"
-                                stroke={isDone ? '#10b981' : '#f59e0b'}
-                                strokeWidth="1.5"
-                              />
-                              <text
-                                x="3"
-                                y="3"
-                                fill="#ffffff"
-                                fontSize="11"
-                                fontWeight="600"
-                              >
-                                {guide.label}
-                              </text>
-                            </g>
-                          )}
-                        </g>
-                      );
-                    }
-
-                    case GuideType.TEXT: {
-                      const tx = (guide.x ?? 0.5) * containerSize.width;
-                      const ty = (guide.y ?? 0.5) * containerSize.height;
-
-                      return (
-                        <g key={`guide-${idx}`} transform={`translate(${tx}, ${ty})`}>
-                          <rect
-                            x="-6"
-                            y="-14"
-                            width={guide.text.length * 8 + 16}
-                            height="24"
-                            rx="5"
-                            fill="#0f172a"
-                            stroke={color}
-                            strokeWidth="1.5"
-                            filter="url(#badge-glow)"
-                          />
-                          <text
-                            x="2"
-                            y="2"
-                            fill="#ffffff"
-                            fontSize={guide.fontSize || 12}
-                            fontWeight="bold"
-                          >
-                            {guide.text}
-                          </text>
-                        </g>
-                      );
-                    }
-
-                    default:
-                      return null;
-                  }
-                })}
-              </svg>
+              <VisualGuideOverlay
+                visible={isShowingGuides && containerSize.width > 0 && containerSize.height > 0}
+                containerSize={containerSize}
+                annotations={annotations}
+                visualGuides={visualGuides}
+                completedSteps={completedSteps}
+                onToggleStep={toggleStepCompleted}
+              />
             )}
           </div>
         ) : (
@@ -622,57 +348,13 @@ export const ScreenPreview: React.FC<ScreenPreviewProps> = ({
           </div>
         )}
 
-        {/* Step-by-Step Roadmap Drawer */}
-        {showStepsDrawer && stepGuides.length > 0 && (
-          <div className="absolute top-2 right-2 bottom-2 w-72 max-w-[85%] bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl backdrop-blur-xl p-3 z-30 flex flex-col animate-fade-in">
-            <div className="flex items-center justify-between pb-2 border-b border-gray-800">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-amber-400" />
-                <h4 className="text-xs font-bold text-gray-100">Roteiro Passo a Passo</h4>
-              </div>
-              <button
-                onClick={() => setShowStepsDrawer(false)}
-                className="text-gray-400 hover:text-white p-1 rounded"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto py-2 space-y-2 pr-1">
-              {stepGuides.map((step) => {
-                const isDone = completedSteps[step.number];
-                return (
-                  <div
-                    key={`step-list-${step.number}`}
-                    onClick={() => toggleStepCompleted(step.number)}
-                    className={`p-2 rounded-lg border text-xs cursor-pointer transition flex items-start gap-2.5 ${
-                      isDone
-                        ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
-                        : 'bg-gray-800/60 border-gray-700 text-gray-200 hover:border-gray-600'
-                    }`}
-                  >
-                    <span
-                      className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[11px] shrink-0 mt-0.5 ${
-                        isDone ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
-                      }`}
-                    >
-                      {isDone ? '✓' : step.number}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className={`font-medium ${isDone ? 'line-through opacity-75' : ''}`}>
-                        {step.label || `Etapa ${step.number}`}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <p className="text-[10px] text-gray-500 pt-2 border-t border-gray-800 text-center">
-              Clique em um passo para marcar como concluído
-            </p>
-          </div>
-        )}
+        <StepRoadmapDrawer
+          isOpen={showStepsDrawer}
+          steps={stepGuides}
+          completedSteps={completedSteps}
+          onToggleStep={toggleStepCompleted}
+          onClose={() => setShowStepsDrawer(false)}
+        />
       </div>
 
       {/* Floating Stop Share Button when active */}

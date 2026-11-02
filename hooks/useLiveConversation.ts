@@ -60,6 +60,9 @@ export const useLiveConversation = ({
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const outboundQueueRef = useRef<string[]>([]);
+  const socketFlushIntervalRef = useRef<number | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -98,6 +101,14 @@ export const useLiveConversation = ({
     }
 
     scriptProcessorRef.current?.disconnect();
+    audioWorkletNodeRef.current?.port.close();
+    audioWorkletNodeRef.current?.disconnect();
+    audioWorkletNodeRef.current = null;
+    if (socketFlushIntervalRef.current !== null) {
+      window.clearInterval(socketFlushIntervalRef.current);
+      socketFlushIntervalRef.current = null;
+    }
+    outboundQueueRef.current = [];
     sourceNodeRef.current?.disconnect();
     analyserRef.current?.disconnect();
 
@@ -189,8 +200,6 @@ export const useLiveConversation = ({
 
       const source = audioContextRef.current.createMediaStreamSource(inputStream);
       sourceNodeRef.current = source;
-      const scriptProcessor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
-      scriptProcessorRef.current = scriptProcessor;
 
       const analyser = audioContextRef.current.createAnalyser();
       analyser.fftSize = 512;
@@ -199,10 +208,53 @@ export const useLiveConversation = ({
       const gainNode = audioContextRef.current.createGain();
       gainNode.gain.setValueAtTime(0, audioContextRef.current.currentTime);
       gainNode.connect(audioContextRef.current.destination);
-
       source.connect(analyser);
-      analyser.connect(scriptProcessor);
-      scriptProcessor.connect(gainNode);
+      analyser.connect(gainNode);
+
+      // Prefer AudioWorklet: audio processing runs off the main UI thread.
+      // Keep ScriptProcessor as a compatibility fallback for older browsers.
+      let audioWorkletNode: AudioWorkletNode | null = null;
+      try {
+        if (!audioContextRef.current.audioWorklet) throw new Error('AudioWorklet indisponível');
+        await audioContextRef.current.audioWorklet.addModule('/audio/pcm-capture-processor.js');
+        audioWorkletNode = new AudioWorkletNode(audioContextRef.current, 'pcm-capture-processor', {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+        });
+        audioWorkletNodeRef.current = audioWorkletNode;
+        source.connect(audioWorkletNode);
+        audioWorkletNode.connect(gainNode);
+      } catch (workletError) {
+        console.info('AudioWorklet indisponível; usando compatibilidade ScriptProcessor.', workletError);
+        const scriptProcessor = audioContextRef.current.createScriptProcessor(2048, 1, 1);
+        scriptProcessorRef.current = scriptProcessor;
+        source.connect(scriptProcessor);
+        scriptProcessor.connect(gainNode);
+      }
+
+      const enqueueSocketMessage = (socket: WebSocket, payload: unknown) => {
+        if (socket.readyState !== WebSocket.OPEN) return;
+        const queue = outboundQueueRef.current;
+        if (queue.length >= 24) queue.shift(); // bounded queue: discard oldest stale media
+        queue.push(JSON.stringify(payload));
+      };
+
+      const handleAudioChunk = (inputData: Float32Array) => {
+        const socket = socketRef.current;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        const isModelSpeaking = playingSourcesRef.current.size > 0;
+        if (isModelSpeaking && micVolumeRef.current < 0.22) return;
+        if (isModelSpeaking && micVolumeRef.current >= 0.22) {
+          playingSourcesRef.current.forEach((src) => { try { src.stop(); } catch {} });
+          playingSourcesRef.current.clear();
+          nextAudioStartTime.current = 0;
+        }
+        enqueueSocketMessage(socket, {
+          type: 'realtime_input',
+          input: { media: createBlob(inputData) },
+        });
+      };
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       const visualize = () => {
@@ -246,35 +298,24 @@ export const useLiveConversation = ({
               model: 'gemini-2.5-flash-native-audio-preview-12-2025',
             }));
           } else if (payload.type === 'session_open') {
+            // Drain a bounded queue only while the browser's WebSocket buffer is healthy.
+            if (socketFlushIntervalRef.current !== null) window.clearInterval(socketFlushIntervalRef.current);
+            socketFlushIntervalRef.current = window.setInterval(() => {
+              if (socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > 256 * 1024) return;
+              const next = outboundQueueRef.current.shift();
+              if (next) socket.send(next);
+            }, 20);
+
             // Audio streaming from microphone to server
-            scriptProcessor.onaudioprocess = (audioEvt) => {
-              if (socket.readyState === WebSocket.OPEN) {
-                // If model is speaking through speakers, prevent microphone loopback
-                // unless user speaks loudly (interruption threshold >= 0.22)
-                const isModelSpeaking = playingSourcesRef.current.size > 0;
-                if (isModelSpeaking && micVolumeRef.current < 0.22) {
-                  return; // Don't stream phone/computer speaker audio back to Gemini
-                }
-
-                // If user speaks loud enough while model is speaking, stop playback locally for barge-in
-                if (isModelSpeaking && micVolumeRef.current >= 0.22) {
-                  playingSourcesRef.current.forEach((src) => {
-                    try { src.stop(); } catch (e) {}
-                  });
-                  playingSourcesRef.current.clear();
-                  nextAudioStartTime.current = 0;
-                }
-
-                const inputData = audioEvt.inputBuffer.getChannelData(0);
-                const pcmBlob = createBlob(inputData);
-                socket.send(
-                  JSON.stringify({
-                    type: 'realtime_input',
-                    input: { media: pcmBlob },
-                  })
-                );
-              }
-            };
+            if (audioWorkletNode) {
+              audioWorkletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
+                handleAudioChunk(event.data);
+              };
+            } else if (scriptProcessorRef.current) {
+              scriptProcessorRef.current.onaudioprocess = (audioEvt) => {
+                handleAudioChunk(audioEvt.inputBuffer.getChannelData(0));
+              };
+            }
 
             // Screen/Camera frame streaming to server
             if (isSharing) {
@@ -282,14 +323,12 @@ export const useLiveConversation = ({
                 if (socket.readyState === WebSocket.OPEN) {
                   try {
                     const base64Data = await captureFrame();
-                    socket.send(
-                      JSON.stringify({
+                    if (socket.bufferedAmount <= 256 * 1024) {
+                      enqueueSocketMessage(socket, {
                         type: 'realtime_input',
-                        input: {
-                          media: { data: base64Data, mimeType: 'image/jpeg' },
-                        },
-                      })
-                    );
+                        input: { media: { data: base64Data, mimeType: 'image/jpeg' } },
+                      });
+                    }
                   } catch (err) {
                     console.debug("Frame capture skipped:", err);
                   }

@@ -2,6 +2,21 @@ import { GeminiResponse, Message, VisualGuide } from "../types";
 import { auth } from "../firebase";
 
 // The API is deployed in the same Vercel project and uses the same origin.
+// Keep requests compact before they cross the network boundary.
+function compactMessages(messages: Message[], maxMessages = 24, maxChars = 32000): Message[] {
+  const selected: Message[] = [];
+  let remaining = maxChars;
+  for (const message of messages.slice(-maxMessages).reverse()) {
+    if (remaining <= 0) break;
+    const text = message.text.trim().slice(-Math.min(4000, remaining));
+    if (!text) continue;
+    selected.push({ role: message.role, text });
+    remaining -= text.length;
+  }
+  return selected.reverse();
+}
+
+
 function apiUrl(path: string): string {
   return path;
 }
@@ -22,7 +37,7 @@ export async function askAboutScreen(
     method: 'POST',
     headers: await authenticatedHeaders(),
     body: JSON.stringify({
-      messages,
+      messages: compactMessages(messages, 20, 26000),
       imageBase64,
       systemInstruction,
     }),
@@ -49,7 +64,7 @@ export async function generateSummary(
     method: 'POST',
     headers: await authenticatedHeaders(),
     body: JSON.stringify({
-      messages,
+      messages: compactMessages(messages, 28, 32000),
       imageBase64,
     }),
   });
