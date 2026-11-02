@@ -15,7 +15,7 @@ interface AdBannerProps {
 export const AdBanner: React.FC<AdBannerProps> = ({ publisherId, slotId, onConfigure }) => {
   const [isDismissed, setIsDismissed] = useState(false);
   const [adLoaded, setAdLoaded] = useState(false);
-  const adRef = useRef<HTMLElement | null>(null);
+  const adRef = useRef<HTMLModElement | null>(null);
 
   useEffect(() => {
     if (!publisherId || !slotId) {
@@ -44,10 +44,10 @@ export const AdBanner: React.FC<AdBannerProps> = ({ publisherId, slotId, onConfi
       script.async = true;
       script.crossOrigin = 'anonymous';
       script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(publisherId)}`;
-      script.addEventListener('load', initializeAd, { once: true });
+      script.addEventListener('load', () => { script!.dataset.loaded = 'true'; initializeAd(); }, { once: true });
       script.addEventListener('error', () => setAdLoaded(false), { once: true });
       document.head.appendChild(script);
-    } else if ((window.adsbygoogle || []).length > 0) {
+    } else if (script.dataset.loaded === 'true') {
       initializeAd();
     } else {
       script.addEventListener('load', initializeAd, { once: true });
@@ -83,7 +83,7 @@ export const AdBanner: React.FC<AdBannerProps> = ({ publisherId, slotId, onConfi
             <div className="w-full max-w-[728px] text-center">
               <span className="block text-[9px] text-gray-500 uppercase tracking-wider">Publicidade</span>
               <ins
-                ref={adRef as React.RefObject<HTMLModElement>}
+                ref={adRef}
                 className="adsbygoogle"
                 style={{ display: 'block', minHeight: '40px', width: '100%' }}
                 data-ad-client={publisherId}
