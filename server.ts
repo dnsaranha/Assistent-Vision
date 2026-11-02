@@ -111,8 +111,8 @@ async function createServer() {
   const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(v => v.trim()).filter(Boolean);
   app.use(cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error('Origem não autorizada pelo CORS.'));
+      if (!origin) return callback(null, false);
+      return callback(null, allowedOrigins.includes(origin));
     },
     credentials: true,
   }));
@@ -289,6 +289,15 @@ async function createServer() {
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = parseUrl(request.url || '');
     if (pathname === '/api/live-ws') {
+      const origin = request.headers.origin;
+      const requestHost = request.headers.host;
+      let sameOrigin = false;
+      try { sameOrigin = !!origin && new URL(origin).host === requestHost; } catch { sameOrigin = false; }
+      if (origin && !sameOrigin && !allowedOrigins.includes(origin)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
