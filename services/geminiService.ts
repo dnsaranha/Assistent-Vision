@@ -3,7 +3,7 @@ import { auth } from "../firebase";
 
 // VITE_API_BASE_URL points to the separately hosted Node backend (for example,
 // https://assistent-vision-api.onrender.com). Empty keeps same-origin local dev.
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\\/+$/, '');
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 function apiUrl(path: string): string {
   return API_BASE_URL ? `${API_BASE_URL}${path}` : path;
 }
