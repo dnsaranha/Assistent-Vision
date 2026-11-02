@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ScreenIcon } from './Icons';
 import { Annotation, VisualGuide, GuideType } from '../types';
 import { CaptureType } from '../hooks/useScreenCapture';
-import { StepRoadmapDrawer } from './StepRoadmapDrawer';
+import { StepRoadmapDrawer, RoadmapStep } from './StepRoadmapDrawer';
 
 interface ScreenPreviewProps {
   stream: MediaStream | null;
@@ -80,7 +80,7 @@ export const ScreenPreview: React.FC<ScreenPreviewProps> = ({
   // Filter number badge guides to generate the assistant step-by-step roadmap
   const stepGuides = visualGuides
     .filter((g) => g.type === GuideType.NUMBER_BADGE)
-    .sort((a: any, b: any) => (a.number ?? 0) - (b.number ?? 0));
+    .sort((a: any, b: any) => (a.number ?? 0) - (b.number ?? 0)) as RoadmapStep[];
 
   const toggleStepCompleted = (stepNumber: number) => {
     setCompletedSteps((prev) => ({
