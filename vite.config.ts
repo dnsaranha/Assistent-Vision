@@ -53,10 +53,10 @@ export default defineConfig(({ mode }) => {
           skipWaiting: true,
           navigateFallback: 'index.html',
           // API/authenticated data must never be served from an offline cache.
-          navigateFallbackDenylist: [/^\\/api\\//],
+          navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             {
-              urlPattern: /^https:\\/\\/fonts\\.googleapis\\.com\\//,
+              urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
               handler: 'StaleWhileRevalidate',
               options: {
                 cacheName: 'google-fonts-stylesheets',
@@ -64,7 +64,7 @@ export default defineConfig(({ mode }) => {
               },
             },
             {
-              urlPattern: /^https:\\/\\/fonts\\.gstatic\\.com\\//,
+              urlPattern: /^https:\/\/fonts\.gstatic\.com\//,
               handler: 'CacheFirst',
               options: {
                 cacheName: 'google-fonts-webfonts',
