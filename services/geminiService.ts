@@ -1,6 +1,13 @@
 import { GeminiResponse, Message, VisualGuide } from "../types";
 import { auth } from "../firebase";
 
+// VITE_API_BASE_URL points to the separately hosted Node backend (for example,
+// https://assistent-vision-api.onrender.com). Empty keeps same-origin local dev.
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\\/+$/, '');
+function apiUrl(path: string): string {
+  return API_BASE_URL ? `${API_BASE_URL}${path}` : path;
+}
+
 async function authenticatedHeaders(): Promise<HeadersInit> {
   const user = auth.currentUser;
   if (!user) throw new Error('Entre na sua conta para usar este recurso.');
@@ -13,7 +20,7 @@ export async function askAboutScreen(
   imageBase64: string | null,
   systemInstruction: string
 ): Promise<GeminiResponse> {
-  const response = await fetch('/api/screen/ask', {
+  const response = await fetch(apiUrl('/api/screen/ask'), {
     method: 'POST',
     headers: await authenticatedHeaders(),
     body: JSON.stringify({
@@ -40,7 +47,7 @@ export async function generateSummary(
   messages: Message[],
   imageBase64: string | null
 ): Promise<string> {
-  const response = await fetch('/api/screen/summary', {
+  const response = await fetch(apiUrl('/api/screen/summary'), {
     method: 'POST',
     headers: await authenticatedHeaders(),
     body: JSON.stringify({
