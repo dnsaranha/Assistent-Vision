@@ -5,9 +5,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { registerApiRoutes } from './server/routes';
 import { attachLiveWebSocket } from './server/liveWebSocket';
-import { getApiKey } from './server/config';
 import { initializeFirebaseAdmin } from './server/firebaseAdmin';
-import { buildConversationHistory } from './server/conversationContext';
 
 async function createServer() {
   const adminAuth = initializeFirebaseAdmin();
