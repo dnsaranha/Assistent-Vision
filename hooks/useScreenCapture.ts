@@ -1,8 +1,6 @@
-import { useState, useRef, useCallback } from 'react';
-import { VisualGuide } from '../types';
-import { drawGuidesOnCanvas } from '../utils/canvasGuideRenderer';
+import { useState, useCallback, useRef } from 'react';
 
-export type CaptureType = 'screen' | 'camera' | 'screenshot' | null;
+export type VisualSourceType = 'screen' | 'camera' | 'image' | null;
 
 interface UseScreenCaptureProps {
   shareSystemAudio: boolean;
@@ -10,313 +8,247 @@ interface UseScreenCaptureProps {
 
 export const useScreenCapture = ({ shareSystemAudio }: UseScreenCaptureProps) => {
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
-  const [captureType, setCaptureType] = useState<CaptureType>(null);
-  const customCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [sourceType, setSourceType] = useState<VisualSourceType>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [customImage, setCustomImage] = useState<string | null>(null);
 
-  const isSharing = !!stream || !!screenshotDataUrl;
+  const isSharing = !!stream || !!customImage;
 
-  const isMobile =
-    typeof navigator !== 'undefined' &&
-    /Android|iPhone|iPad|iPod|Mobile|webOS|BlackBerry|IEMobile|Opera Mini/i.test(
-      navigator.userAgent
-    );
-
-  const isNativeDisplaySupported =
-    typeof window !== 'undefined' &&
-    typeof navigator !== 'undefined' &&
-    !!navigator.mediaDevices &&
+  const isScreenSupported = typeof navigator !== 'undefined' && 
+    !!navigator.mediaDevices && 
     typeof navigator.mediaDevices.getDisplayMedia === 'function';
 
-  // Screen capture (works on both Computer and modern Android Chrome)
-  const startScreenCapture = useCallback(
-    async (mode: 'screen' | 'camera' = 'screen') => {
-      // Clear any prior stream/screenshot
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-        setStream(null);
-      }
-      setScreenshotDataUrl(null);
+  const isCameraSupported = typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getUserMedia === 'function';
 
-      if (mode === 'camera') {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          throw new Error("Câmera não suportada neste navegador.");
-        }
+  const stopScreenCapture = useCallback(() => {
+    if (stream) {
+      stream.getTracks().forEach(track => {
+        try { track.stop(); } catch {}
+      });
+      setStream(null);
+    }
+    setCustomImage(null);
+    setSourceType(null);
+  }, [stream]);
 
-        let cameraStream: MediaStream;
+  // Screen Sharing (Desktop & supported Android browsers)
+  const startScreenCapture = useCallback(async () => {
+    if (!isScreenSupported) {
+      const errorMessage = "Compartilhamento de tela não é suportado pelo seu navegador neste dispositivo (no iOS e em navegadores mobile use a Câmera como no Google Meet).";
+      console.warn(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    // Stop existing stream if any
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+
+    let mediaStream: MediaStream | null = null;
+
+    try {
+      const displayMediaOptions: DisplayMediaStreamOptions = {
+        video: true,
+        ...(shareSystemAudio ? { audio: true } : { audio: false }),
+      };
+      mediaStream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+    } catch (err: any) {
+      if (err instanceof DOMException && (err.name === 'NotSupportedError' || err.name === 'TypeError') && shareSystemAudio) {
+        console.warn("Retrying getDisplayMedia without system audio...");
         try {
-          // Try rear/environment camera first
-          cameraStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: 'environment' } },
-            audio: false,
-          });
-        } catch (err1) {
-          try {
-            // Fallback to any available camera
-            cameraStream = await navigator.mediaDevices.getUserMedia({
-              video: true,
-              audio: false,
-            });
-          } catch (err2: any) {
-            if (err2?.name === 'NotAllowedError' || (err2?.message || '').includes('Permission denied')) {
-              throw new Error("Acesso à câmera negado. Clique no ícone de permissão na barra do navegador para permitir.");
+          mediaStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        } catch (retryErr) {
+          throw retryErr;
+        }
+      } else {
+        if (err instanceof DOMException) {
+          if (err.name === 'NotAllowedError') {
+            if (err.message && err.message.toLowerCase().includes('permissions policy')) {
+              throw new Error("A permissão para captura de tela está restrita pelo navegador neste contexto.");
             }
-            throw new Error(`Não foi possível acessar a câmera: ${err2?.message || 'Erro de hardware ou permissão'}`);
+            throw new Error("PERMISSION_DENIED");
+          } else if (err.name === 'NotFoundError') {
+            throw new Error("Nenhuma tela encontrada para compartilhar.");
+          } else if (err.name === 'AbortError') {
+            throw new Error("PERMISSION_DENIED");
           }
         }
-
-        setStream(cameraStream);
-        setCaptureType('camera');
-
-        cameraStream.getVideoTracks()[0]?.addEventListener('ended', () => {
-          stopScreenCapture();
-        });
-
-        return cameraStream;
-      }
-
-      // Default: Screen / Display capture - identical to Google Meet and Zoom Web
-      const getDisplayMedia =
-        navigator.mediaDevices?.getDisplayMedia?.bind(navigator.mediaDevices) ||
-        (navigator as any).getDisplayMedia?.bind(navigator);
-
-      if (!getDisplayMedia) {
-        throw new Error(
-          "API getDisplayMedia não disponível no navegador. Atualize o navegador ou use o Google Chrome."
-        );
-      }
-
-      let mediaStream: MediaStream;
-      try {
-        // Exactly like Google Meet / Zoom: on mobile, request pure video: true without audio constraints
-        if (isMobile) {
-          mediaStream = await getDisplayMedia({
-            video: true,
-          });
-        } else {
-          // On desktop, try with system audio if requested
-          try {
-            mediaStream = await getDisplayMedia({
-              video: true,
-              audio: shareSystemAudio,
-            });
-          } catch (audioErr: any) {
-            if (audioErr?.name !== 'NotAllowedError') {
-              console.warn("Retrying with video only (Google Meet standard)...", audioErr);
-              mediaStream = await getDisplayMedia({
-                video: true,
-                audio: false,
-              });
-            } else {
-              throw audioErr;
-            }
-          }
-        }
-      } catch (err: any) {
-        const msg = (err?.message || '').toLowerCase();
-        const inIframe = typeof window !== 'undefined' && window.self !== window.top;
-
-        if (
-          msg.includes('permissions policy') ||
-          msg.includes('disallowed') ||
-          (inIframe && err?.name === 'NotAllowedError')
-        ) {
-          throw new Error("IFRAME_PERMISSION_DENIED");
-        }
-
-        if (err?.name === 'NotAllowedError') {
-          throw new Error("PERMISSION_DENIED");
-        }
-
-        if (err?.name === 'NotSupportedError') {
-          throw new Error(
-            "Captura de tela restrita neste navegador. Toque em 'Abrir em Nova Aba' para transmitir a tela inteira como no Google Meet."
-          );
-        }
-
         throw err;
       }
+    }
 
+    if (mediaStream) {
       setStream(mediaStream);
-      setCaptureType('screen');
+      setCustomImage(null);
+      setSourceType('screen');
 
       const videoTrack = mediaStream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => {
-          stopScreenCapture();
+          mediaStream?.getTracks().forEach(track => {
+            try { track.stop(); } catch {}
+          });
+          setStream(null);
+          setSourceType(null);
         };
       }
-
-      return mediaStream;
-    },
-    [isMobile, isNativeDisplaySupported, shareSystemAudio, stream]
-  );
-
-  const stopScreenCapture = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      setStream(null);
     }
-    setScreenshotDataUrl(null);
-    setCaptureType(null);
+  }, [isScreenSupported, shareSystemAudio, stream]);
+
+  // Camera Capture (Works universally on all Mobile Phones & Desktops, just like Google Meet)
+  const startCameraCapture = useCallback(async (desiredFacing: 'environment' | 'user' = facingMode) => {
+    if (!isCameraSupported) {
+      throw new Error("Acesso à câmera não é suportado pelo navegador neste ambiente.");
+    }
+
+    // Stop existing stream if any
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+
+    try {
+      const constraints: MediaStreamConstraints = {
+        video: {
+          facingMode: { ideal: desiredFacing },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      };
+
+      const camStream = await navigator.mediaDevices.getUserMedia(constraints);
+      setStream(camStream);
+      setCustomImage(null);
+      setSourceType('camera');
+      setFacingMode(desiredFacing);
+
+      const videoTrack = camStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          camStream?.getTracks().forEach(track => {
+            try { track.stop(); } catch {}
+          });
+          setStream(null);
+          setSourceType(null);
+        };
+      }
+    } catch (err: any) {
+      console.error("Camera access failed:", err);
+      if (err instanceof DOMException && err.name === 'NotAllowedError') {
+        throw new Error("Permissão para câmera foi negada. Permita o acesso à câmera para usar no celular.");
+      }
+      throw new Error("Não foi possível acessar a câmera do dispositivo.");
+    }
+  }, [facingMode, isCameraSupported, stream]);
+
+  // Toggle front and back camera (for mobile users)
+  const toggleCameraFacing = useCallback(async () => {
+    if (sourceType !== 'camera') return;
+    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
+    await startCameraCapture(nextFacing);
+  }, [facingMode, sourceType, startCameraCapture]);
+
+  // Upload an image or photo directly
+  const uploadImage = useCallback((file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      if (!file.type.startsWith('image/')) {
+        return reject(new Error("Selecione um arquivo de imagem válido."));
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(',')[1];
+        if (stream) {
+          stream.getTracks().forEach(t => t.stop());
+          setStream(null);
+        }
+        setCustomImage(result);
+        setSourceType('image');
+        resolve(base64);
+      };
+      reader.onerror = () => reject(new Error("Falha ao ler o arquivo de imagem."));
+      reader.readAsDataURL(file);
+    });
   }, [stream]);
 
-  // Set real user screenshot (e.g. taken on mobile phone or computer)
-  const setScreenshot = useCallback(
-    (dataUrl: string) => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-        setStream(null);
-      }
-      setScreenshotDataUrl(dataUrl);
-      setCaptureType('screenshot');
-
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width || 1280;
-        canvas.height = img.height || 720;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          customCanvasRef.current = canvas;
-          try {
-            if (typeof (canvas as any).captureStream === 'function') {
-              const canvasStream = (canvas as any).captureStream(10);
-              setStream(canvasStream);
-            }
-          } catch (e) {
-            console.debug("Could not capture stream from canvas:", e);
-          }
-        }
-      };
-      img.src = dataUrl;
-    },
-    [stream]
-  );
-
-  const captureFrame = useCallback(async (overlayGuides?: VisualGuide[]): Promise<string> => {
-    if (screenshotDataUrl) {
-      if (!overlayGuides || overlayGuides.length === 0) {
-        // Uploaded screenshots may be PNG or WebP. Normalize every frame to JPEG
-        // because the backend sends imageBase64 to Gemini as image/jpeg.
-        return new Promise((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.naturalWidth || img.width || 1280;
-            canvas.height = img.naturalHeight || img.height || 720;
-            const context = canvas.getContext('2d');
-            if (!context) return reject(new Error('Erro ao preparar a imagem.'));
-            context.drawImage(img, 0, 0, canvas.width, canvas.height);
-            resolve(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
-          };
-          img.onerror = () => reject(new Error('Não foi possível ler a imagem enviada.'));
-          img.src = screenshotDataUrl;
-        });
-      }
-      // If there are overlay guides on a static screenshot, composite them
-      return new Promise((resolve) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.width || 1280;
-          canvas.height = img.height || 720;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            drawGuidesOnCanvas(ctx, overlayGuides, canvas.width, canvas.height);
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-            resolve(dataUrl.split(',')[1]);
-          } else {
-            resolve(screenshotDataUrl.split(',')[1]);
-          }
-        };
-        img.onerror = () => resolve(screenshotDataUrl.split(',')[1]);
-        img.src = screenshotDataUrl;
-      });
-    }
-
-    if (!stream) {
-      throw new Error("A tela ou câmera não está ativa.");
-    }
-
-    const videoTrack = stream.getVideoTracks()[0];
-    if (!videoTrack || videoTrack.readyState === 'ended') {
-      throw new Error("O compartilhamento foi encerrado.");
+  const captureFrame = useCallback(async (): Promise<string> => {
+    if (customImage) {
+      return customImage.split(',')[1];
     }
 
     return new Promise((resolve, reject) => {
+      if (!stream) {
+        return reject(new Error("Nenhum vídeo ou tela ativa."));
+      }
+
+      const videoTrack = stream.getVideoTracks()[0];
+      if (!videoTrack || videoTrack.readyState === 'ended') {
+        return reject(new Error("A transmissão foi encerrada."));
+      }
+
       const video = document.createElement('video');
       video.srcObject = stream;
       video.muted = true;
       video.playsInline = true;
 
-      const timeout = setTimeout(() => {
+      const cleanup = () => {
         video.srcObject = null;
         video.remove();
-        reject(new Error("Tempo esgotado ao capturar imagem."));
-      }, 3500);
+      };
 
       video.onloadedmetadata = () => {
-        video.play().catch((e) => {
-          clearTimeout(timeout);
-          video.srcObject = null;
-          video.remove();
-          reject(new Error(`Erro ao reproduzir fluxo: ${e}`));
+        video.play().catch(e => {
+          cleanup();
+          reject(new Error(`Erro ao reproduzir vídeo: ${e}`));
         });
       };
 
       video.onplay = () => {
-        clearTimeout(timeout);
-        const canvas = document.createElement('canvas');
-        const settings = videoTrack.getSettings();
-        canvas.width = video.videoWidth || settings.width || 1280;
-        canvas.height = video.videoHeight || settings.height || 720;
-        const context = canvas.getContext('2d');
+        try {
+          const canvas = document.createElement('canvas');
+          const settings = videoTrack.getSettings();
+          canvas.width = settings.width || video.videoWidth || 1280;
+          canvas.height = settings.height || video.videoHeight || 720;
+          const context = canvas.getContext('2d');
+          if (!context) {
+            cleanup();
+            return reject(new Error('Erro ao obter contexto do canvas.'));
+          }
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          video.pause();
 
-        if (!context) {
-          video.srcObject = null;
-          video.remove();
-          return reject(new Error('Erro ao obter contexto do canvas.'));
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+          cleanup();
+          resolve(dataUrl.split(',')[1]);
+        } catch (canvasErr) {
+          cleanup();
+          reject(canvasErr);
         }
-
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        // Composite active visual guides if provided
-        if (overlayGuides && overlayGuides.length > 0) {
-          drawGuidesOnCanvas(context, overlayGuides, canvas.width, canvas.height);
-        }
-
-        video.pause();
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-
-        video.srcObject = null;
-        video.remove();
-        resolve(dataUrl.split(',')[1]);
       };
 
       video.onerror = (e) => {
-        clearTimeout(timeout);
-        video.srcObject = null;
-        video.remove();
+        cleanup();
         reject(new Error(`Erro no elemento de vídeo: ${e}`));
       };
     });
-  }, [screenshotDataUrl, stream]);
+  }, [customImage, stream]);
 
   return {
     stream,
     isSharing,
-    isMobile,
-    isNativeDisplaySupported,
-    screenshotDataUrl,
-    captureType,
+    sourceType,
+    facingMode,
+    customImage,
+    isScreenSupported,
+    isCameraSupported,
     startScreenCapture,
+    startCameraCapture,
+    toggleCameraFacing,
     stopScreenCapture,
-    setScreenshot,
+    uploadImage,
     captureFrame,
   };
 };

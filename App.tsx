@@ -1,32 +1,25 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Message, Role, Annotation, VisualGuide } from './types';
 import { askAboutScreen, generateSummary } from './services/geminiService';
 import { useScreenCapture } from './hooks/useScreenCapture';
 import { useLiveConversation } from './hooks/useLiveConversation';
-import { useAuth } from './hooks/useAuth';
+import { useSmoothSplitter } from './hooks/useSmoothSplitter';
 import { ConversationView } from './components/ConversationView';
 import { Controls } from './components/Controls';
 import { ScreenPreview } from './components/ScreenPreview';
 import { SettingsModal, Settings } from './components/SettingsModal';
-import { LoginGate } from './components/LoginGate';
-import { Header } from './components/Header';
+import { SplitterHandle } from './components/SplitterHandle';
+import { SplitPresetsBar } from './components/SplitPresetsBar';
 import { AdBanner } from './components/AdBanner';
-import { MicPermissionModal } from './components/MicPermissionModal';
 
-const DEFAULT_SYSTEM_INSTRUCTION =
-  "Você é o Vision, um assistente de IA especialista em produtividade e orientação visual interativa na tela. Suas capacidades principais são:\n1. Orientação Visual na Tela com Desenhos: Quando o usuário pedir ajuda para encontrar botões, campos, opções ou realizar uma tarefa, responda em `response_text` e utilize o array `visual_guides` para desenhar na tela:\n- 'number_badge': Desenhe círculos numerados (1, 2, 3...) nas posições x, y e use o campo `label` para descrever a ação (ex: 'Passo 1: Clicar em Arquivo').\n- 'arrow': Aponte setas (startX, startY até endX, endY) indicando o local exato com `label` explicativo.\n- 'circle': Desenhe círculos com raio e cor destacando botões ou ícones.\n- 'rect': Desenhe retângulos delimitando caixas, menus ou tabelas (x, y, width, height e label).\n- 'text': Escreva notas ou anotações flutuantes explicativas na tela.\n2. Roteiro Passo a Passo: Ordene os number_badges sequencialmente para formar um guia passo a passo completo.\n3. Código e Solução de Erros: Analise erros, depure telas e mostre onde corrigir.\nSe não for uma pergunta visual ou não precisar de desenho, retorne `visual_guides` vazio.";
-
-const DEFAULT_LIVE_SYSTEM_INSTRUCTION =
-  "Você é o Vision, assistente de IA de visão de tela e voz em tempo real. Responda em português de forma concisa, direta e prestativa. Aponte e explique o que está na tela com precisão. Interrompa sua fala imediatamente quando o usuário falar.";
+const DEFAULT_SYSTEM_INSTRUCTION = "Você é um assistente de IA prestativo chamado Vision. Suas capacidades são: 1. Orientação Visual: Quando o usuário pedir ajuda para navegar na interface em sua tela compartilhada ou através da câmera do celular/computador, seu principal objetivo é fornecer orientação visual. Forneça uma resposta curta em `response_text` e use o array `visual_guides` para desenhar na tela. Você pode usar 'arrow' para apontar para elementos, 'text' para adicionar rótulos e 'number_badge' para indicar uma sequência de etapas. Combine esses guias para fornecer instruções claras e passo a passo. 2. Código e Resolução de Problemas: Você é um programador especialista. Ajude os usuários com seus códigos, depure problemas e ofereça soluções. 3. Assistência Geral: Ajude com uma ampla gama de tarefas. Para tarefas não visuais, retorne um array `visual_guides` vazio. Importante: Adapte seu comportamento e siga as novas diretrizes se o usuário fornecer instruções para alterar sua função durante a conversa.";
+const DEFAULT_LIVE_SYSTEM_INSTRUCTION = "Você é um assistente de IA prestativo chamado Vision. Você está em uma conversa de voz e pode ver a tela ou o que a câmera do usuário transmite em tempo real. Suas capacidades são: 1. Guia Visual: Ajude os usuários a navegar em sua tela ou no que estiverem mostrando com a câmera. 2. Programador e Solucionador de Problemas: Você é um programador especialista. Ajude com código, depuração e problemas complexos. 3. Identificador de Música: Se o usuário perguntar 'que música é essa?', analise o áudio do sistema para identificar o título da música e o artista. 4. Assistente Geral: Ajude com uma ampla gama de tarefas. 5. Adaptável e Interrompível: Você deve parar de falar imediatamente se o usuário começar a falar. Além disso, adapte seu comportamento e siga novas diretrizes se o usuário fornecer instruções para alterar sua função durante a conversa. Seja sempre conciso e prestativo.";
 
 const App: React.FC = () => {
-  // Authentication state
-  const { user, loading: authLoading, error: authError, signInWithGoogle, signOut, clearError: clearAuthError } = useAuth();
-
   const [messages, setMessages] = useState<Message[]>([
     {
       role: Role.ASSISTANT,
-      text: "Olá! Eu sou o Vision, seu assistente inteligente com visão de tela. Compartilhe sua tela, conecte sua câmera ou envie uma captura para começarmos!",
+      text: "Olá! Eu sou seu assistente visual. Ative a câmera, compartilhe sua tela ou envie uma foto e me faça uma pergunta por texto ou voz.",
     },
   ]);
   const [isLoading, setIsLoading] = useState(false);
@@ -34,43 +27,6 @@ const App: React.FC = () => {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [visualGuides, setVisualGuides] = useState<VisualGuide[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isMicModalOpen, setIsMicModalOpen] = useState(false);
-
-  // Screen aspect & width detection for responsive split (desktop/landscape: side-by-side, mobile/portrait: top-bottom)
-  const [isRowLayout, setIsRowLayout] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true;
-    return window.innerWidth >= 768 && window.innerWidth >= window.innerHeight;
-  });
-
-  useEffect(() => {
-    const handleResize = () => {
-      const isWide = window.innerWidth >= 768 && window.innerWidth >= window.innerHeight;
-      setIsRowLayout(isWide);
-    };
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
-    };
-  }, []);
-
-  // Resizable split state: screen preview ratio (between 0.18 and 0.82)
-  const [splitRatio, setSplitRatio] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem('visionSplitRatio');
-      if (saved) {
-        const parsed = parseFloat(saved);
-        if (!isNaN(parsed) && parsed >= 0.18 && parsed <= 0.82) return parsed;
-      }
-    } catch (e) {}
-    return 0.50; // default 50/50 clean balanced layout
-  });
-  const [isDraggingSplit, setIsDraggingSplit] = useState(false);
-  const mainContainerRef = useRef<HTMLDivElement>(null);
-  const isDraggingRef = useRef(false);
-
   const [settings, setSettings] = useState<Settings>({
     micSensitivity: 1.0,
     audioOutputDeviceId: 'default',
@@ -80,25 +36,38 @@ const App: React.FC = () => {
     liveSystemInstruction: DEFAULT_LIVE_SYSTEM_INSTRUCTION,
   });
 
+  const {
+    containerRef,
+    splitRatio,
+    rawSplitRatio,
+    isDragging,
+    isMaximized,
+    isMobile,
+    presets,
+    startDragging,
+    applyPreset,
+    toggleMaximize,
+  } = useSmoothSplitter();
+
   useEffect(() => {
     try {
       const savedSettings = localStorage.getItem('visualAssistantSettings');
       if (savedSettings) {
         const loaded = JSON.parse(savedSettings);
-        setSettings((prev) => ({
-          ...prev,
+        setSettings(prev => ({
+          ...prev, 
           ...loaded,
           systemInstruction: loaded.systemInstruction || DEFAULT_SYSTEM_INSTRUCTION,
           liveSystemInstruction: loaded.liveSystemInstruction || DEFAULT_LIVE_SYSTEM_INSTRUCTION,
         }));
       }
     } catch (e) {
-      console.error('Failed to load settings from localStorage', e);
+      console.error("Failed to load settings from localStorage", e);
     }
   }, []);
-
+  
   const handleApiKeyError = useCallback(() => {
-    setError('Sua chave de API do Gemini parece ser inválida ou não está configurada no servidor.');
+    setError("Sua chave de API parece ser inválida ou não está configurada.");
   }, []);
 
   const handleSettingsChange = (newSettings: Settings) => {
@@ -106,37 +75,37 @@ const App: React.FC = () => {
     try {
       localStorage.setItem('visualAssistantSettings', JSON.stringify(newSettings));
     } catch (e) {
-      console.error('Failed to save settings to localStorage', e);
+      console.error("Failed to save settings to localStorage", e);
     }
   };
 
   const {
     stream,
     isSharing,
-    isMobile,
-    screenshotDataUrl,
-    captureType,
+    sourceType,
+    facingMode,
+    customImage,
     startScreenCapture,
+    startCameraCapture,
+    toggleCameraFacing,
     stopScreenCapture,
-    setScreenshot,
+    uploadImage,
     captureFrame,
-  } = useScreenCapture({
-    shareSystemAudio: settings.shareSystemAudio,
+  } = useScreenCapture({ 
+    shareSystemAudio: settings.shareSystemAudio 
   });
-
+  
   const systemAudioTrack = stream?.getAudioTracks()[0];
 
-  const {
-    isLive,
-    isSpeaking,
-    startConversation,
-    stopConversation,
-    interruptSpeech,
-    liveMessages,
-    micVolume,
-  } = useLiveConversation({
-    isSharing,
-    captureFrame,
+  const { 
+    isLive, 
+    startConversation, 
+    stopConversation, 
+    liveMessages, 
+    micVolume 
+  } = useLiveConversation({ 
+    isSharing, 
+    captureFrame, 
     onError: (e) => setError(e),
     micSensitivity: settings.micSensitivity,
     audioOutputDeviceId: settings.audioOutputDeviceId,
@@ -146,200 +115,114 @@ const App: React.FC = () => {
     onApiKeyError: handleApiKeyError,
   });
 
-  // Rock-solid drag and drop resizable splitter logic with Pointer Capture
-  const handleSplitPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
-    setIsDraggingSplit(true);
-    isDraggingRef.current = true;
-  };
+  const handleNewMessage = useCallback(async (prompt: string) => {
+    if (!prompt || isLoading || isLive) return;
 
-  const updateSplitFromPointer = useCallback(
-    (clientX: number, clientY: number) => {
-      if (!mainContainerRef.current) return;
-      const rect = mainContainerRef.current.getBoundingClientRect();
-      let newRatio: number;
+    setIsLoading(true);
+    setError(null);
+    setAnnotations([]);
+    setVisualGuides([]);
+    
+    const newMessages: Message[] = [...messages, { role: Role.USER, text: prompt }];
+    setMessages(newMessages);
 
-      if (isRowLayout) {
-        newRatio = (clientX - rect.left) / rect.width;
-      } else {
-        newRatio = (clientY - rect.top) / rect.height;
-      }
-
-      // Smoothly clamp between 18% and 82%
-      const clamped = Math.max(0.18, Math.min(0.82, newRatio));
-      setSplitRatio(clamped);
-    },
-    [isRowLayout]
-  );
-
-  const handleSplitPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDraggingRef.current) return;
-    updateSplitFromPointer(e.clientX, e.clientY);
-  };
-
-  const handleSplitPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {}
-    isDraggingRef.current = false;
-    setIsDraggingSplit(false);
-    try {
-      localStorage.setItem('visionSplitRatio', splitRatio.toString());
-    } catch {}
-  };
-
-  useEffect(() => {
-    if (!isDraggingSplit) return;
-
-    const handleWindowPointerMove = (e: PointerEvent) => {
-      if (!isDraggingRef.current) return;
-      updateSplitFromPointer(e.clientX, e.clientY);
-    };
-
-    const handleWindowPointerUp = () => {
-      isDraggingRef.current = false;
-      setIsDraggingSplit(false);
+    let imageBase64: string | null = null;
+    if (isSharing) {
       try {
-        localStorage.setItem('visionSplitRatio', splitRatio.toString());
-      } catch {}
-    };
+        imageBase64 = await captureFrame();
+      } catch (err) {
+        setError('Não foi possível capturar o quadro visual.');
+        setIsLoading(false);
+        return;
+      }
+    }
 
-    window.addEventListener('pointermove', handleWindowPointerMove, { passive: false });
-    window.addEventListener('pointerup', handleWindowPointerUp);
-    window.addEventListener('pointercancel', handleWindowPointerUp);
-
-    return () => {
-      window.removeEventListener('pointermove', handleWindowPointerMove);
-      window.removeEventListener('pointerup', handleWindowPointerUp);
-      window.removeEventListener('pointercancel', handleWindowPointerUp);
-    };
-  }, [isDraggingSplit, updateSplitFromPointer, splitRatio]);
-
-  const handleSetPresetRatio = (ratio: number) => {
-    setSplitRatio(ratio);
     try {
-      localStorage.setItem('visionSplitRatio', ratio.toString());
-    } catch (err) {}
-  };
+      const response = await askAboutScreen(newMessages, imageBase64, settings.systemInstruction);
+      setMessages((prev) => [...prev, { role: Role.ASSISTANT, text: response.text }]);
+      if (response.annotations) {
+        setAnnotations(response.annotations);
+      }
+      if (response.visualGuides) {
+        setVisualGuides(response.visualGuides);
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Um erro desconhecido ocorreu.';
+      if (errorMessage.includes("Requested entity was not found.") || errorMessage.includes("API key not valid")) {
+        handleApiKeyError();
+      } else {
+        setError(`Falha ao obter resposta do Gemini: ${errorMessage}`);
+        setMessages((prev) => [...prev, { role: Role.ASSISTANT, text: `Desculpe, encontrei um erro: ${errorMessage}` }]);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isLoading, isSharing, captureFrame, isLive, settings.systemInstruction, messages, handleApiKeyError]);
 
-  const handleUploadScreenshot = useCallback(
-    (file: File) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        if (e.target?.result) {
-          setScreenshot(e.target.result as string);
-          setAnnotations([]);
-          setVisualGuides([]);
-        }
-      };
-      reader.readAsDataURL(file);
-    },
-    [setScreenshot]
-  );
-
-  const handlePasteScreenshot = useCallback(
-    (dataUrl: string) => {
-      setScreenshot(dataUrl);
+  const handleToggleScreenSharing = useCallback(async () => {
+    if (sourceType === 'screen') {
+      stopScreenCapture();
       setAnnotations([]);
       setVisualGuides([]);
-    },
-    [setScreenshot]
-  );
-
-  const handleNewMessage = useCallback(
-    async (prompt: string) => {
-      if (!prompt || isLoading || isLive) return;
-
-      setIsLoading(true);
-      setError(null);
-
-      const newMessages: Message[] = [...messages, { role: Role.USER, text: prompt }];
-      setMessages(newMessages);
-
-      let imageBase64: string | null = null;
-      if (isSharing || screenshotDataUrl) {
-        try {
-          imageBase64 = await captureFrame(visualGuides);
-        } catch (err) {
-          setError('Não foi possível capturar o quadro da tela.');
-          setIsLoading(false);
-          return;
-        }
-      }
-
+    } else {
       try {
-        const response = await askAboutScreen(newMessages, imageBase64, settings.systemInstruction);
-        setMessages((prev) => [...prev, { role: Role.ASSISTANT, text: response.text }]);
-        if (response.annotations) {
-          setAnnotations(response.annotations);
-        }
-        if (response.visualGuides && response.visualGuides.length > 0) {
-          setVisualGuides(response.visualGuides);
-        }
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Um erro desconhecido ocorreu.';
-        if (errorMessage.includes('Requested entity was not found.') || errorMessage.includes('API key not valid')) {
-          handleApiKeyError();
-        } else {
-          setError(`Falha ao obter resposta do Vision: ${errorMessage}`);
-          setMessages((prev) => [
-            ...prev,
-            { role: Role.ASSISTANT, text: `Desculpe, encontrei um erro ao processar: ${errorMessage}` },
-          ]);
-        }
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [isLoading, isSharing, screenshotDataUrl, captureFrame, isLive, settings.systemInstruction, messages, handleApiKeyError, visualGuides]
-  );
-
-  const handleToggleScreenSharing = useCallback(
-    async (mode: 'screen' | 'camera' = 'screen') => {
-      if (isSharing) {
-        stopScreenCapture();
+        setError(null);
+        await startScreenCapture();
         setAnnotations([]);
         setVisualGuides([]);
-      } else {
-        if (isLive) {
-          stopConversation();
-        }
-        try {
-          setError(null);
-          await startScreenCapture(mode);
-        } catch (err: any) {
-          const errorMessage = err instanceof Error ? err.message : '';
-          if (errorMessage === 'PERMISSION_DENIED') {
-            setError('O compartilhamento de tela foi cancelado no navegador.');
-          } else if (errorMessage === 'IFRAME_PERMISSION_DENIED') {
-            setError(
-              "Permissão restrita pelo iframe. Use o botão 'Nova Aba' no topo da tela para compartilhar sem restrições."
-            );
-          } else {
-            setError(errorMessage || 'Erro ao iniciar compartilhamento.');
-          }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : '';
+        if (errorMessage === "PERMISSION_DENIED") {
+          setError("O compartilhamento de tela foi cancelado. Para que eu possa ver sua tela, clique no ícone novamente e escolha 'Permitir'.");
+        } else {
+          setError(errorMessage || 'Falha ao iniciar compartilhamento de tela.');
         }
       }
-    },
-    [isSharing, isLive, startScreenCapture, stopScreenCapture, stopConversation]
-  );
+    }
+  }, [sourceType, startScreenCapture, stopScreenCapture]);
+
+  const handleToggleCamera = useCallback(async () => {
+    if (sourceType === 'camera') {
+      stopScreenCapture();
+      setAnnotations([]);
+      setVisualGuides([]);
+    } else {
+      try {
+        setError(null);
+        await startCameraCapture();
+        setAnnotations([]);
+        setVisualGuides([]);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Falha ao acessar a câmera.';
+        setError(errorMessage);
+      }
+    }
+  }, [sourceType, startCameraCapture, stopScreenCapture]);
+
+  const handleUploadImage = useCallback(async (file: File) => {
+    try {
+      setError(null);
+      await uploadImage(file);
+      setAnnotations([]);
+      setVisualGuides([]);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Falha ao carregar a imagem.';
+      setError(errorMessage);
+    }
+  }, [uploadImage]);
 
   const handleToggleLiveSession = useCallback(() => {
     if (isLive) {
       stopConversation();
       if (liveMessages.length > 0) {
-        setMessages((prev) => [...prev, ...liveMessages]);
+        setMessages(prev => [...prev, ...liveMessages]);
       }
     } else {
       setError(null);
       startConversation();
     }
   }, [isLive, stopConversation, startConversation, liveMessages]);
-
+  
   const downloadTextFile = (content: string, filename: string) => {
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -358,27 +241,27 @@ const App: React.FC = () => {
     setError(null);
     try {
       let imageBase64: string | null = null;
-      if (isSharing || screenshotDataUrl) {
+      if (isSharing) {
         try {
           imageBase64 = await captureFrame();
         } catch (err) {
-          console.debug('Could not capture frame for summary, proceeding without it.', err);
+          console.error("Could not capture frame for summary, proceeding without it.", err);
         }
       }
       const summary = await generateSummary(messages, imageBase64);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      downloadTextFile(summary, `resumo-vision-${timestamp}.md`);
+      downloadTextFile(summary, `resumo-reuniao-${timestamp}.md`);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      if (errorMessage.includes('Requested entity was not found.') || errorMessage.includes('API key not valid')) {
-        handleApiKeyError();
+      if (errorMessage.includes("Requested entity was not found.") || errorMessage.includes("API key not valid")) {
+         handleApiKeyError();
       } else {
         setError(`Falha ao gerar o resumo: ${errorMessage}`);
       }
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, isLive, messages, isSharing, screenshotDataUrl, captureFrame, handleApiKeyError]);
+  }, [isLoading, isLive, messages, isSharing, captureFrame, handleApiKeyError]);
 
   useEffect(() => {
     if (error) {
@@ -387,288 +270,160 @@ const App: React.FC = () => {
     }
   }, [error]);
 
-  // Loading state while checking Firebase auth session
-  if (authLoading) {
-    return (
-      <div className="min-h-screen w-full bg-gray-950 flex flex-col items-center justify-center p-4">
-        <div className="relative">
-          <img src="/logo.png" alt="Vision Logo" className="w-16 h-16 rounded-2xl shadow-xl shadow-cyan-500/20 mb-4 animate-pulse" />
-          <div className="absolute inset-0 rounded-2xl border-2 border-cyan-400 border-t-transparent animate-spin" />
-        </div>
-        <p className="text-sm font-semibold text-gray-300">Iniciando Vision...</p>
-        <span className="text-xs text-gray-500 mt-1">Carregando autenticação segura</span>
-      </div>
-    );
-  }
-
-  // Login Gate: Only logged-in users with Google/Gmail are granted access
-  if (!user) {
-    return (
-      <LoginGate
-        onSignIn={signInWithGoogle}
-        isLoading={authLoading}
-        error={authError}
-        onClearError={clearAuthError}
-      />
-    );
-  }
-
   const currentMessages = isLive ? liveMessages : messages;
   const currentLoadingState = isLoading || (isLive && liveMessages.length === 0);
 
-  // Compute CSS dimension strings for resizable split
-  const screenPercentage = Math.round(splitRatio * 100);
-  const chatPercentage = 100 - screenPercentage;
-
   return (
     <>
-      <div className="flex flex-col h-screen w-full bg-gray-950 text-gray-100 font-sans overflow-hidden">
+      <div className="flex h-screen w-full bg-gray-900 text-gray-200 font-sans flex-col overflow-hidden">
+        {/* Header with Title and Presets + 1-Click Maximize/Restore */}
+        <header className="bg-gray-800/60 backdrop-blur-sm border-b border-gray-700/80 px-3 py-2 md:px-4 flex flex-wrap items-center justify-between gap-2 z-10 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-md shadow-cyan-950/60">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <h1 className="text-base sm:text-lg md:text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500 truncate">
+              Assistente Visual por Voz
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Quick Presets & 1-Click Expand/Restore */}
+            <SplitPresetsBar
+              presets={presets}
+              currentRatio={rawSplitRatio}
+              isMaximized={isMaximized}
+              onSelectPreset={applyPreset}
+              onToggleMaximize={toggleMaximize}
+            />
+
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              disabled={isLoading || isLive}
+              className="p-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white border border-gray-700 transition-colors"
+              title="Configurações"
+              aria-label="Abrir configurações"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+          </div>
+        </header>
         
-        {/* App Header with Vision Logo, PWA Install Button and Google User Profile */}
-        <Header
-          user={user}
-          onSignOut={signOut}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          isSharing={isSharing}
-          isLive={isLive}
-        />
-
-        {/* Quick Split Ratio Presets Bar */}
-        <div className="bg-gray-900/60 border-b border-gray-800/80 px-3 py-1 flex items-center justify-between text-[11px] text-gray-400 select-none">
-          <div className="flex items-center gap-1.5">
-            <span className="text-gray-500 hidden sm:inline">Tamanho da Visão:</span>
-            <span className="font-semibold text-cyan-400">{screenPercentage}%</span>
-            <span className="text-gray-600">/</span>
-            <span className="text-gray-400">{chatPercentage}% Chat</span>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => handleSetPresetRatio(0.30)}
-              className={`px-2 py-0.5 rounded text-[10px] transition cursor-pointer ${
-                screenPercentage === 30 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
-              }`}
-              title="Tela compacta (30%)"
-            >
-              30%
-            </button>
-            <button
-              onClick={() => handleSetPresetRatio(0.50)}
-              className={`px-2 py-0.5 rounded text-[10px] transition cursor-pointer ${
-                screenPercentage === 50 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
-              }`}
-              title="Equilibrado (50%)"
-            >
-              50%
-            </button>
-            <button
-              onClick={() => handleSetPresetRatio(0.70)}
-              className={`px-2 py-0.5 rounded text-[10px] transition cursor-pointer ${
-                screenPercentage === 70 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
-              }`}
-              title="Visão ampla (70%)"
-            >
-              70%
-            </button>
-            <button
-              onClick={() => handleSetPresetRatio(0.85)}
-              className={`px-2 py-0.5 rounded text-[10px] transition cursor-pointer ${
-                screenPercentage === 85 ? 'bg-cyan-600 text-white font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
-              }`}
-              title="Foco total (85%)"
-            >
-              85%
-            </button>
-            <button
-              onClick={() => handleSetPresetRatio(screenPercentage > 80 ? 0.50 : 0.85)}
-              className="px-2 py-0.5 rounded text-[10px] bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/30 transition cursor-pointer font-medium ml-1"
-              title={screenPercentage > 80 ? "Restaurar layout equilibrado" : "Expandir visão"}
-            >
-              {screenPercentage > 80 ? "Restaurar" : "Expandir"}
-            </button>
-          </div>
-        </div>
-
-        {/* Main Work Area with Draggable Resizable Split Pane */}
+        {/* Main Resizable Workspace */}
         <main
-          ref={mainContainerRef}
-          style={{ flexDirection: isRowLayout ? 'row' : 'column' }}
-          className={`flex-1 flex w-full overflow-hidden relative select-none ${
-            isDraggingSplit ? (isRowLayout ? 'cursor-col-resize' : 'cursor-row-resize') : ''
-          }`}
+          ref={containerRef as any}
+          className="flex-1 flex flex-col md:flex-row overflow-hidden relative"
         >
-          {/* Transparent Overlay during dragging to prevent iframes/videos from stealing pointer events */}
-          {isDraggingSplit && (
+          {/* Transparent Overlay during dragging to prevent video or canvas from stealing pointer events */}
+          {isDragging && (
             <div
-              className={`fixed inset-0 z-50 ${isRowLayout ? 'cursor-col-resize' : 'cursor-row-resize'}`}
-              style={{ userSelect: 'none', pointerEvents: 'auto' }}
+              className={`fixed inset-0 z-50 select-none bg-transparent ${
+                isMobile ? 'cursor-row-resize' : 'cursor-col-resize'
+              }`}
+              style={{ touchAction: 'none' }}
             />
           )}
 
-          {/* Pane 1: Screen & Vision Monitor */}
+          {/* Screen / Camera Preview Section */}
           <div
+            className="flex flex-col p-2 md:p-3 overflow-hidden"
             style={
-              isRowLayout
+              isMobile
                 ? {
-                    flex: `0 0 ${screenPercentage}%`,
-                    width: `${screenPercentage}%`,
-                    maxWidth: '82%',
-                    minWidth: '18%',
+                    height: isMaximized ? '100%' : `${splitRatio}%`,
+                    width: '100%',
                   }
                 : {
-                    flex: `0 0 ${screenPercentage}%`,
-                    height: `${screenPercentage}%`,
-                    maxHeight: '82%',
-                    minHeight: '18%',
+                    width: isMaximized ? '100%' : `${splitRatio}%`,
+                    height: '100%',
                   }
             }
-            className={`flex flex-col min-w-0 min-h-0 overflow-hidden shrink-0 ${
-              isRowLayout ? 'h-full p-2 md:p-3' : 'w-full p-1.5 sm:p-2'
-            }`}
           >
-            <ScreenPreview
-              stream={stream}
-              isSharing={isSharing}
+            <ScreenPreview 
+              stream={stream} 
+              isSharing={isSharing} 
+              sourceType={sourceType}
+              facingMode={facingMode}
+              customImage={customImage}
               annotations={annotations}
-              visualGuides={visualGuides}
-              onClearGuides={() => setVisualGuides([])}
-              onStartScreenShare={handleToggleScreenSharing}
-              onStopScreenShare={handleToggleScreenSharing}
-              onUploadScreenshot={handleUploadScreenshot}
-              onPasteScreenshot={handlePasteScreenshot}
-              screenshotDataUrl={screenshotDataUrl}
-              captureType={captureType}
-              isMobile={isMobile}
+              visualGuides={visualGuides} 
+              onStartScreen={handleToggleScreenSharing}
+              onStartCamera={handleToggleCamera}
+              onToggleCamera={toggleCameraFacing}
+              onUploadImage={handleUploadImage}
             />
           </div>
 
-          {/* Draggable Divider Handle (Rock-solid with Pointer Capture - NEVER escapes) */}
-          <div
-            onPointerDown={handleSplitPointerDown}
-            onPointerMove={handleSplitPointerMove}
-            onPointerUp={handleSplitPointerUp}
-            className={`group relative flex items-center justify-center shrink-0 z-20 touch-none select-none transition-colors ${
-              isRowLayout
-                ? 'cursor-col-resize h-full w-4 py-2 hover:bg-cyan-500/20 active:bg-cyan-500/40'
-                : 'cursor-row-resize w-full h-5 px-2 hover:bg-cyan-500/20 active:bg-cyan-500/40'
-            } ${isDraggingSplit ? 'bg-cyan-500/30' : 'bg-gray-900 border-gray-800'}`}
-            title="Arraste para redimensionar a divisão da tela"
-          >
-            {/* Grip Handle Indicator */}
-            <div className="flex items-center justify-center pointer-events-none">
-              <div
-                className={`rounded-full transition-all duration-150 ${
-                  isDraggingSplit
-                    ? 'bg-cyan-400 scale-125 shadow-lg shadow-cyan-500/60'
-                    : 'bg-gray-500 group-hover:bg-cyan-400'
-                } ${isRowLayout ? 'w-1.5 h-12' : 'w-16 h-1.5'}`}
+          {/* Draggable Divider with touch-action: none */}
+          {!isMaximized && (
+            <SplitterHandle
+              onPointerDown={startDragging}
+              isDragging={isDragging}
+              isMobile={isMobile}
+              onDoubleClick={toggleMaximize}
+            />
+          )}
+
+          {/* Conversation and Controls Section */}
+          {!isMaximized && (
+            <div
+              className="flex flex-col overflow-hidden"
+              style={
+                isMobile
+                  ? {
+                      height: `${100 - splitRatio}%`,
+                      width: '100%',
+                    }
+                  : {
+                      width: `${100 - splitRatio}%`,
+                      height: '100%',
+                    }
+              }
+            >
+              <ConversationView messages={currentMessages} isLoading={currentLoadingState} />
+              <Controls
+                onSendMessage={handleNewMessage}
+                isListening={isLive}
+                toggleListening={handleToggleLiveSession}
+                isSharing={isSharing}
+                sourceType={sourceType}
+                toggleScreenSharing={handleToggleScreenSharing}
+                toggleCamera={handleToggleCamera}
+                onUploadImage={handleUploadImage}
+                isLoading={isLoading}
+                isSpeaking={false}
+                micVolume={micVolume}
+                onOpenSettings={() => setIsSettingsOpen(true)}
+                onGenerateSummary={handleGenerateSummary}
+                hasConversation={messages.length > 1}
               />
             </div>
-          </div>
+          )}
 
-          {/* Pane 2: Conversation View & Controls (Fills 100% of remaining space - never clips) */}
-          <div
-            className={`flex-1 flex flex-col min-w-0 min-h-0 bg-gray-900/40 overflow-hidden ${
-              isRowLayout ? 'h-full' : 'w-full'
-            }`}
-          >
-            <ConversationView messages={currentMessages} isLoading={currentLoadingState} />
-            <Controls
-              onSendMessage={handleNewMessage}
-              isListening={isLive}
-              toggleListening={handleToggleLiveSession}
-              isSharing={isSharing}
-              toggleScreenSharing={handleToggleScreenSharing}
-              isLoading={isLoading}
-              isSpeaking={isSpeaking}
-              onInterrupt={interruptSpeech}
-              micVolume={micVolume}
-              onOpenSettings={() => setIsSettingsOpen(true)}
-              onGenerateSummary={handleGenerateSummary}
-              hasConversation={messages.length > 1}
-            />
-          </div>
-
-          {/* Floating error notification with retry button for mic permission */}
           {error && (
-            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 max-w-[92vw] sm:max-w-lg px-4 py-3 rounded-xl bg-red-900/95 text-white text-xs font-medium shadow-2xl backdrop-blur-md border border-red-500 flex items-start sm:items-center justify-between gap-3 animate-fade-in">
-              <div className="flex items-start gap-2.5 flex-1 min-w-0">
-                <svg className="w-5 h-5 text-red-300 shrink-0 mt-0.5 sm:mt-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-red-100 leading-tight">Aviso do Sistema</p>
-                  <p className="text-red-200 mt-0.5 text-[11px] leading-relaxed break-words">{error}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap justify-end">
-                {error.includes('Nova Aba') && (
-                  <a
-                    href={typeof window !== 'undefined' ? window.location.href : '#'}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-[11px] transition inline-flex items-center gap-1 shadow"
-                  >
-                    <span>Abrir Nova Aba</span>
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                    </svg>
-                  </a>
-                )}
-                {(error.toLowerCase().includes('microfone') || error.toLowerCase().includes('permissão')) && (
-                  <>
-                    <button
-                      onClick={() => setIsMicModalOpen(true)}
-                      className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-[11px] transition cursor-pointer shadow flex items-center gap-1"
-                    >
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <span>Como Liberar</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setError(null);
-                        handleToggleLiveSession();
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-white font-semibold text-[11px] transition cursor-pointer"
-                    >
-                      Tentar Novamente
-                    </button>
-                  </>
-                )}
-                <button
-                  onClick={() => setError(null)}
-                  className="p-1 rounded text-red-300 hover:text-white hover:bg-red-800/60 transition cursor-pointer"
-                  title="Fechar aviso"
-                >
-                  ✕
-                </button>
-              </div>
+            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-red-500/90 text-white text-sm shadow-xl backdrop-blur-sm border border-red-400 flex items-center gap-2 animate-bounce-short">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              {error}
             </div>
           )}
         </main>
 
-        {/* AdMob Bottom Advertising Bar (Configured via project secret environment variables) */}
+        {/* Commercial & ADS Banner at the bottom */}
         <AdBanner />
       </div>
 
-      {/* Settings Modal */}
-      <SettingsModal
+      <SettingsModal 
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onSettingsChange={handleSettingsChange}
-      />
-
-      {/* Microphone Permission Guide & Real-Time Test Modal */}
-      <MicPermissionModal
-        isOpen={isMicModalOpen}
-        onClose={() => setIsMicModalOpen(false)}
-        onRetryStart={() => {
-          setError(null);
-          handleToggleLiveSession();
-        }}
       />
     </>
   );

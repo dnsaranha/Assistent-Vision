@@ -27,16 +27,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
             const getDevices = async () => {
                 try {
                     // We need to request mic permission to get the full list of device labels
-                    const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    try {
-                        const devices = await navigator.mediaDevices.enumerateDevices();
-                        const audioOutputDevices = devices.filter(device => device.kind === 'audiooutput');
-                        setAudioDevices(audioOutputDevices);
-                    } finally {
-                        // The temporary stream is only used to reveal device labels.
-                        // Always release the microphone immediately after enumeration.
-                        permissionStream.getTracks().forEach(track => track.stop());
-                    }
+                    await navigator.mediaDevices.getUserMedia({ audio: true });
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    const audioOutputDevices = devices.filter(device => device.kind === 'audiooutput');
+                    setAudioDevices(audioOutputDevices);
                 } catch (err) {
                     console.error("Could not enumerate audio devices:", err);
                     // Add the default device as a fallback
@@ -189,7 +183,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                             </label>
                             <textarea
                                 id="live-system-instruction"
-                                rows={4}
+                                rows={5}
                                 value={settings.liveSystemInstruction}
                                 onChange={e => onSettingsChange({ ...settings, liveSystemInstruction: e.target.value })}
                                 className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"

@@ -17,11 +17,8 @@ export interface Annotation {
 
 export enum GuideType {
   ARROW = 'arrow',
-  CIRCLE = 'circle',
-  RECT = 'rect',
   TEXT = 'text',
   NUMBER_BADGE = 'number_badge',
-  FREEHAND = 'freehand',
 }
 
 export interface ArrowGuide {
@@ -31,31 +28,6 @@ export interface ArrowGuide {
   endX: number;
   endY: number;
   label?: string;
-  color?: string;
-  strokeWidth?: number;
-}
-
-export interface CircleGuide {
-  type: GuideType.CIRCLE;
-  x: number;
-  y: number;
-  radius: number; // normalized radius (e.g., 0.02 to 0.25)
-  label?: string;
-  color?: string;
-  strokeWidth?: number;
-  fill?: boolean;
-}
-
-export interface RectGuide {
-  type: GuideType.RECT;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  label?: string;
-  color?: string;
-  strokeWidth?: number;
-  fill?: boolean;
 }
 
 export interface TextGuide {
@@ -63,36 +35,16 @@ export interface TextGuide {
   x: number;
   y: number;
   text: string;
-  color?: string;
-  fontSize?: number;
 }
 
 export interface NumberBadgeGuide {
-  type: GuideType.NUMBER_BADGE;
-  x: number;
-  y: number;
-  number: number;
-  label?: string;
-  color?: string;
+    type: GuideType.NUMBER_BADGE;
+    x: number;
+    y: number;
+    number: number;
 }
 
-export interface FreehandGuide {
-  type: GuideType.FREEHAND;
-  points: { x: number; y: number }[];
-  color?: string;
-  strokeWidth?: number;
-}
-
-export type VisualGuide =
-  | ArrowGuide
-  | CircleGuide
-  | RectGuide
-  | TextGuide
-  | NumberBadgeGuide
-  | FreehandGuide;
-
-export type DrawingTool = 'select' | 'step' | 'arrow' | 'circle' | 'rect' | 'pen' | 'text';
-
+export type VisualGuide = ArrowGuide | TextGuide | NumberBadgeGuide;
 
 
 export interface GeminiResponse {

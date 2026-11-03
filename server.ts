@@ -1,45 +1,81 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
-import fs from 'fs';
-import { parse as parseUrl } from 'url';
+import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
-import cors from 'cors';
-import rateLimit from 'express-rate-limit';
-import { initializeApp as initializeAdminApp, cert, applicationDefault, getApps as getAdminApps } from 'firebase-admin/app';
-import { getAuth as getAdminAuth } from 'firebase-admin/auth';
-import { GoogleGenAI, Type, Modality } from '@google/genai';
+import { GoogleGenAI, LiveServerMessage, Modality, Type, Part } from '@google/genai';
 
-// Load environment variables from .env.local or .env if present
-function loadLocalEnv() {
-  const envFiles = ['.env.local', '.env'];
-  for (const file of envFiles) {
-    const fullPath = path.resolve(process.cwd(), file);
-    if (fs.existsSync(fullPath)) {
-      try {
-        const content = fs.readFileSync(fullPath, 'utf-8');
-        for (const line of content.split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
-          const eqIdx = trimmed.indexOf('=');
-          if (eqIdx !== -1) {
-            const key = trimmed.slice(0, eqIdx).trim();
-            const val = trimmed.slice(eqIdx + 1).trim().replace(/^['"]|['"]$/g, '');
-            if (!process.env[key]) {
-              process.env[key] = val;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn(`Could not read ${file}:`, e);
-      }
-    }
-  }
+// Attempt to load .env file if available
+try {
+  (process as any).loadEnvFile?.();
+} catch {}
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const app = express();
+
+// Increase JSON payload limit for high-resolution screenshot frames
+app.use(express.json({ limit: '50mb' }));
+
+function getApiKey(): string {
+  return process.env.GEMINI_API_KEY || process.env.API_KEY || '';
 }
 
-loadLocalEnv();
+function getGeminiClient(apiKey: string): GoogleGenAI {
+  return new GoogleGenAI({
+    apiKey: apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
 
-const getApiKey = () => process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+function extractErrorMessage(error: any): string {
+  if (typeof error === 'string') {
+    try {
+      const parsed = JSON.parse(error);
+      if (parsed?.error?.message) return parsed.error.message;
+    } catch {}
+    return error;
+  }
+  if (error?.message) {
+    try {
+      const parsed = JSON.parse(error.message);
+      if (parsed?.error?.message) return parsed.error.message;
+    } catch {}
+    return error.message;
+  }
+  return 'Ocorreu um erro inesperado ao consultar o Gemini.';
+}
+
+async function generateContentWithRetry(ai: GoogleGenAI, params: any) {
+  try {
+    return await ai.models.generateContent(params);
+  } catch (err: any) {
+    const isTemporary = err?.message?.includes('503') || err?.message?.includes('UNAVAILABLE') || err?.status === 503;
+    if (isTemporary) {
+      console.warn('Gemini 503 spike encountered, retrying with brief delay...');
+      await new Promise(r => setTimeout(r, 1200));
+      try {
+        return await ai.models.generateContent(params);
+      } catch (retryErr: any) {
+        if (params.model !== 'gemini-2.5-flash') {
+          console.warn('Switching to gemini-2.5-flash as resilient fallback...');
+          return await ai.models.generateContent({
+            ...params,
+            model: 'gemini-2.5-flash',
+          });
+        }
+        throw retryErr;
+      }
+    }
+    throw err;
+  }
+}
 
 const responseSchema = {
   type: Type.OBJECT,
@@ -54,34 +90,30 @@ const responseSchema = {
       items: {
         type: Type.OBJECT,
         properties: {
-          x: { type: Type.NUMBER, description: "Normalized x-coordinate (0.0 to 1.0) of the top-left corner." },
-          y: { type: Type.NUMBER, description: "Normalized y-coordinate (0.0 to 1.0) of the top-left corner." },
-          width: { type: Type.NUMBER, description: "Normalized width (0.0 to 1.0)." },
-          height: { type: Type.NUMBER, description: "Normalized height (0.0 to 1.0)." },
+          x: { type: Type.NUMBER, description: "The normalized x-coordinate (from 0.0 to 1.0) of the top-left corner of the highlight box." },
+          y: { type: Type.NUMBER, description: "The normalized y-coordinate (from 0.0 to 1.0) of the top-left corner of the highlight box." },
+          width: { type: Type.NUMBER, description: "The normalized width (from 0.0 to 1.0) of the highlight box." },
+          height: { type: Type.NUMBER, description: "The normalized height (from 0.0 to 1.0) of the highlight box." },
         },
         required: ["x", "y", "width", "height"],
       },
     },
     visual_guides: {
       type: Type.ARRAY,
-      description: "An optional list of visual guides to draw on the screen (arrows, circles, rectangles, text labels, and numbered step badges).",
+      description: "An optional list of visual guides to draw on the screen to help the user, such as arrows, text labels, or numbered steps.",
       items: {
         type: Type.OBJECT,
         properties: {
-          type: { type: Type.STRING, description: "The type of guide: 'arrow', 'circle', 'rect', 'text', or 'number_badge'." },
-          startX: { type: Type.NUMBER, description: "For 'arrow': normalized start X (0.0 to 1.0)." },
-          startY: { type: Type.NUMBER, description: "For 'arrow': normalized start Y (0.0 to 1.0)." },
-          endX: { type: Type.NUMBER, description: "For 'arrow': normalized end X (0.0 to 1.0)." },
-          endY: { type: Type.NUMBER, description: "For 'arrow': normalized end Y (0.0 to 1.0)." },
-          label: { type: Type.STRING, description: "Optional explanatory label or step title (e.g. 'Clique aqui', 'Passo 1: Salvar')." },
-          x: { type: Type.NUMBER, description: "Normalized X coordinate (0.0 to 1.0) for circle center, rect top-left, text, or number_badge." },
-          y: { type: Type.NUMBER, description: "Normalized Y coordinate (0.0 to 1.0) for circle center, rect top-left, text, or number_badge." },
-          width: { type: Type.NUMBER, description: "For 'rect': normalized width (0.0 to 1.0)." },
-          height: { type: Type.NUMBER, description: "For 'rect': normalized height (0.0 to 1.0)." },
-          radius: { type: Type.NUMBER, description: "For 'circle': normalized radius (0.01 to 0.25)." },
-          text: { type: Type.STRING, description: "For 'text' type: text content." },
-          number: { type: Type.INTEGER, description: "For 'number_badge' type: step sequence number (1, 2, 3...)." },
-          color: { type: Type.STRING, description: "Optional hex color like '#fef08a' (yellow), '#38bdf8' (cyan), '#f43f5e' (red), '#4ade80' (green)." },
+          type: { type: Type.STRING, description: "The type of guide ('arrow', 'text', 'number_badge')." },
+          startX: { type: Type.NUMBER, description: "For 'arrow' type: The normalized starting x-coordinate." },
+          startY: { type: Type.NUMBER, description: "For 'arrow' type: The normalized starting y-coordinate." },
+          endX: { type: Type.NUMBER, description: "For 'arrow' type: The normalized ending x-coordinate." },
+          endY: { type: Type.NUMBER, description: "For 'arrow' type: The normalized ending y-coordinate." },
+          label: { type: Type.STRING, description: "For 'arrow' type: An optional text label for the arrow." },
+          x: { type: Type.NUMBER, description: "For 'text' or 'number_badge' types: The normalized x-coordinate of the guide." },
+          y: { type: Type.NUMBER, description: "For 'text' or 'number_badge' types: The normalized y-coordinate of the guide." },
+          text: { type: Type.STRING, description: "For 'text' type: The text content of the label." },
+          number: { type: Type.INTEGER, description: "For 'number_badge' type: The number for the badge." },
         },
         required: ["type"],
       },
@@ -90,380 +122,314 @@ const responseSchema = {
   required: ["response_text"],
 };
 
-function initializeFirebaseAdmin() {
-  if (getAdminApps().length) return getAdminAuth();
-  let projectId = process.env.FIREBASE_PROJECT_ID;
-  if (!projectId) {
+// POST /api/gemini/ask-screen
+app.post('/api/gemini/ask-screen', async (req, res) => {
+  try {
+    const key = getApiKey();
+    if (!key) {
+      return res.status(500).json({
+        error: 'Sua chave de API do Gemini não foi encontrada no servidor. Verifique o painel Settings > Secrets.',
+      });
+    }
+
+    const { messages, imageBase64, systemInstruction } = req.body;
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Messages array is required.' });
+    }
+
+    const conversationHistory = messages
+      .slice(1, -1)
+      .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
+      .join('\n\n');
+
+    const currentPrompt = messages[messages.length - 1].text;
+    const fullPrompt = `This is the conversation history so far:\n${conversationHistory}\n\nHere is the current user request: "${currentPrompt}"`;
+
+    const parts: Part[] = [{ text: fullPrompt }];
+
+    if (imageBase64) {
+      parts.unshift({
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: imageBase64,
+        },
+      });
+    }
+
+    const ai = getGeminiClient(key);
+    const response = await generateContentWithRetry(ai, {
+      model: 'gemini-flash-latest',
+      contents: { parts },
+      config: {
+        systemInstruction: systemInstruction || undefined,
+        responseMimeType: 'application/json',
+        responseSchema: responseSchema,
+      },
+    });
+
+    const responseText = response.text || '';
     try {
-      const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
-      if (fs.existsSync(configPath)) {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-        projectId = config.projectId;
-      }
-    } catch {}
-  }
-  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (serviceAccountJson) {
-    const serviceAccount = JSON.parse(serviceAccountJson);
-    initializeAdminApp({ credential: cert(serviceAccount), projectId: projectId || serviceAccount.project_id });
-  } else {
-    initializeAdminApp({ credential: applicationDefault(), ...(projectId ? { projectId } : {}) });
-  }
-  return getAdminAuth();
-}
-
-async function createServer() {
-  const adminAuth = initializeFirebaseAdmin();
-  const app = express();
-  const server = http.createServer(app);
-
-  const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(v => v.trim()).filter(Boolean);
-  app.use(cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, false);
-      return callback(null, allowedOrigins.includes(origin));
-    },
-    credentials: true,
-  }));
-  app.use(express.json({ limit: '4mb' }));
-
-  const apiLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    limit: 20,
-    standardHeaders: 'draft-7',
-    legacyHeaders: false,
-    message: { error: 'Muitas solicitações. Aguarde um minuto e tente novamente.' },
-  });
-  const authenticate = async (req: any, res: any, next: any) => {
-    const authorization = req.headers.authorization || '';
-    const match = authorization.match(/^Bearer (.+)$/i);
-    if (!match) return res.status(401).json({ error: 'Autenticação necessária.' });
-    try {
-      req.user = await adminAuth.verifyIdToken(match[1]);
-      return next();
+      const parsed = JSON.parse(responseText);
+      return res.json({
+        text: parsed.response_text || "Desculpe, não consegui formular uma resposta.",
+        annotations: parsed.highlights || [],
+        visualGuides: parsed.visual_guides || [],
+      });
     } catch {
-      return res.status(401).json({ error: 'Sessão inválida ou expirada. Entre novamente.' });
+      return res.json({
+        text: responseText,
+        annotations: [],
+        visualGuides: [],
+      });
+    }
+  } catch (error: any) {
+    console.error('Error in ask-screen:', error);
+    return res.status(500).json({
+      error: extractErrorMessage(error),
+    });
+  }
+});
+
+// POST /api/gemini/summary
+app.post('/api/gemini/summary', async (req, res) => {
+  try {
+    const key = getApiKey();
+    if (!key) {
+      return res.status(500).json({
+        error: 'Sua chave de API do Gemini não foi encontrada no servidor. Verifique o painel Settings > Secrets.',
+      });
+    }
+
+    const { messages, imageBase64 } = req.body;
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Messages array is required.' });
+    }
+
+    const conversationHistory = messages
+      .slice(1)
+      .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
+      .join('\n');
+
+    const prompt = `Based on the following conversation history, which may involve multiple speakers, and the final screenshot of the shared screen (if provided), generate a concise summary structured as meeting minutes. Your primary task is to identify and differentiate between speakers (e.g., "Speaker 1:", "Speaker 2:"). Use conversational cues from the text to attribute statements. The summary should include key decisions, action items, and main topics. Where relevant, refer to visual elements from the screenshot to provide context. Format the output in Markdown.\n\nConversation:\n${conversationHistory}`;
+
+    const parts: Part[] = [{ text: prompt }];
+
+    if (imageBase64) {
+      parts.unshift({
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: imageBase64,
+        },
+      });
+    }
+
+    const ai = getGeminiClient(key);
+    const response = await generateContentWithRetry(ai, {
+      model: 'gemini-flash-latest',
+      contents: { parts },
+      config: {
+        systemInstruction: "You are an expert at summarizing conversations that may involve visual context. Your task is to convert a transcript and a final screenshot into a well-structured and professional summary, formatted in Markdown. Identify key points, decisions, and action items, incorporating visual references where applicable.",
+      },
+    });
+
+    return res.json({ summary: response.text || '' });
+  } catch (error: any) {
+    console.error('Error in summary:', error);
+    return res.status(500).json({
+      error: extractErrorMessage(error),
+    });
+  }
+});
+
+// GET /api/config/ads - returns ad unit block IDs and configuration securely from server environment
+app.get('/api/config/ads', (_req, res) => {
+  const clientId = process.env.ADS_CLIENT_ID || '';
+  const slotId = process.env.ADS_SLOT_ID || '';
+  const format = process.env.ADS_FORMAT || 'auto';
+
+  res.json({
+    enabled: !!(clientId && slotId),
+    clientId,
+    slotId,
+    format,
+  });
+});
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+
+// WebSocket upgrade handler for Live API
+server.on('upgrade', (request, socket, head) => {
+  const url = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`);
+  if (url.pathname === '/api/live' || url.pathname === '/live') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  }
+});
+
+wss.on('connection', async (clientWs: WebSocket, req: http.IncomingMessage) => {
+  const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+  const voiceName = url.searchParams.get('voice') || 'Zephyr';
+  const customInstruction = url.searchParams.get('systemInstruction') || '';
+
+  const safeSend = (data: any) => {
+    if (clientWs.readyState === WebSocket.OPEN) {
+      try {
+        clientWs.send(JSON.stringify(data));
+      } catch (e) {
+        console.error('Failed to send message to client WebSocket:', e);
+      }
     }
   };
 
-  // API Health Check
-  app.get('/api/health', (req, res) => {
-    res.json({
-      status: 'ok',
-      hasApiKey: !!getApiKey(),
-      timestamp: new Date().toISOString(),
-    });
-  });
+  const key = getApiKey();
+  if (!key) {
+    safeSend({ error: 'Sua chave de API do Gemini não foi encontrada no servidor. Verifique o painel Settings > Secrets.' });
+    clientWs.close();
+    return;
+  }
 
-  // Public Ad Configuration from project environment variables (never editable in client UI)
-  app.get('/api/ad-config', (req, res) => {
-    res.json({
-      publisherId: process.env.ADMOB_PUBLISHER_ID || process.env.VITE_ADMOB_PUBLISHER_ID || '',
-      slotId: process.env.ADMOB_SLOT_ID || process.env.VITE_ADMOB_SLOT_ID || '',
-    });
-  });
+  let liveSession: any = null;
+  let isClosed = false;
 
-  // REST API: Ask About Screen
-  app.post('/api/screen/ask', apiLimiter, authenticate, async (req, res) => {
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      return res.status(500).json({
-        error: "Chave GEMINI_API_KEY não configurada no servidor.",
-      });
-    }
-
-    const { messages, imageBase64, systemInstruction } = req.body || {};
-    if (!messages || !Array.isArray(messages) || messages.length > 40 ||
-        messages.some((m: any) => !m || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string' || m.text.length > 12000) ||
-        (imageBase64 != null && (typeof imageBase64 !== 'string' || imageBase64.length > 3_800_000)) ||
-        (systemInstruction != null && (typeof systemInstruction !== 'string' || systemInstruction.length > 8000))) {
-      return res.status(400).json({ error: "Parâmetro 'messages' inválido." });
-    }
-
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-
-      // Build conversation history
-      const conversationHistory = messages
-        .slice(1, -1)
-        .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
-        .join('\n\n');
-
-      const currentPrompt = messages[messages.length - 1]?.text || '';
-      const fullPrompt = conversationHistory
-        ? `This is the conversation history so far:\n${conversationHistory}\n\nHere is the current user request: "${currentPrompt}"`
-        : currentPrompt;
-
-      const parts: any[] = [{ text: fullPrompt }];
-
-      if (imageBase64) {
-        parts.unshift({
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: imageBase64,
+  try {
+    const ai = getGeminiClient(key);
+    const sessionPromise = ai.live.connect({
+      model: 'gemini-3.8-live',
+      config: {
+        responseModalities: [Modality.AUDIO],
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: voiceName,
+            },
           },
-        });
-      }
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: { parts },
-        config: {
-          systemInstruction: systemInstruction || undefined,
-          responseMimeType: 'application/json',
-          responseSchema,
         },
-      });
-
-      const responseText = response.text || '{}';
-      let parsedResponse: any = {};
-      try {
-        parsedResponse = JSON.parse(responseText);
-      } catch (parseError) {
-        console.warn("Could not parse JSON response from model, returning raw text:", responseText);
-        return res.json({
-          text: responseText,
-          annotations: [],
-          visualGuides: [],
-        });
-      }
-
-      return res.json({
-        text: parsedResponse.response_text || 'Não consegui obter uma resposta para a tela.',
-        annotations: (parsedResponse.highlights || []).map((h: any) => ({
-          x: h.x,
-          y: h.y,
-          width: h.width,
-          height: h.height,
-        })),
-        visualGuides: parsedResponse.visual_guides || [],
-      });
-    } catch (err: any) {
-      console.error("Error in /api/screen/ask:", err);
-      return res.status(500).json({ error: 'Erro interno ao processar a solicitação.' });
-    }
-  });
-
-  // REST API: Generate Meeting/Session Summary
-  app.post('/api/screen/summary', apiLimiter, authenticate, async (req, res) => {
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      return res.status(500).json({
-        error: "Chave GEMINI_API_KEY não configurada no servidor.",
-      });
-    }
-
-    const { messages, imageBase64 } = req.body || {};
-    if (!messages || !Array.isArray(messages) || messages.length > 40 ||
-        messages.some((m: any) => !m || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string' || m.text.length > 12000) ||
-        (imageBase64 != null && (typeof imageBase64 !== 'string' || imageBase64.length > 3_800_000))) {
-      return res.status(400).json({ error: "Parâmetro 'messages' inválido." });
-    }
-
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-
-      const conversationHistory = messages
-        .slice(1)
-        .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
-        .join('\n');
-
-      const prompt = `Based on the following conversation history, which may involve multiple speakers, and the final screenshot of the shared screen (if provided), generate a concise summary structured as meeting minutes. Your primary task is to identify and differentiate between speakers (e.g., "Speaker 1:", "Speaker 2:"). Use conversational cues from the text to attribute statements. The summary should include key decisions, action items, and main topics. Where relevant, refer to visual elements from the screenshot to provide context. Format the output in Markdown.\n\nConversation:\n${conversationHistory}`;
-
-      const parts: any[] = [{ text: prompt }];
-
-      if (imageBase64) {
-        parts.unshift({
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: imageBase64,
-          },
-        });
-      }
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: { parts },
-        config: {
-          systemInstruction:
-            "You are an expert at summarizing conversations that may involve visual context. Your task is to convert a transcript and a final screenshot into a well-structured and professional summary, formatted in Markdown. Identify key points, decisions, and action items, incorporating visual references where applicable.",
+        systemInstruction: customInstruction || undefined,
+      },
+      callbacks: {
+        onopen: () => {
+          safeSend({ type: 'connected' });
         },
-      });
+        onmessage: (message: LiveServerMessage) => {
+          const content = message.serverContent;
+          if (content?.inputTranscription?.text) {
+            safeSend({ inputTranscript: content.inputTranscription.text });
+          }
+          if (content?.outputTranscription?.text) {
+            safeSend({ outputTranscript: content.outputTranscription.text });
+          }
+          for (const part of content?.modelTurn?.parts ?? []) {
+            if (part.inlineData?.data) {
+              safeSend({ audio: part.inlineData.data });
+            }
+          }
+          if (content?.interrupted) {
+            safeSend({ interrupted: true });
+          }
+          if (content?.turnComplete) {
+            safeSend({ turnComplete: true });
+          }
+        },
+        onclose: (e: any) => {
+          safeSend({ type: 'closed', detail: e });
+          if (!isClosed) {
+            isClosed = true;
+            try { clientWs.close(); } catch {}
+          }
+        },
+        onerror: (err: any) => {
+          console.error('Live session error:', err);
+          safeSend({ error: extractErrorMessage(err) });
+          if (!isClosed) {
+            isClosed = true;
+            try { clientWs.close(); } catch {}
+          }
+        },
+      },
+    });
 
-      return res.json({
-        summary: response.text || '',
-      });
-    } catch (err: any) {
-      console.error("Error in /api/screen/summary:", err);
-      return res.status(500).json({ error: 'Erro interno ao gerar o resumo.' });
-    }
-  });
-
-  // WebSocket Server for Live API Proxy
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 5 * 1024 * 1024 });
-  const activeUserSessions = new Map<string, { ws: WebSocket; liveSession: any }>();
-
-  server.on('upgrade', (request, socket, head) => {
-    const { pathname } = parseUrl(request.url || '');
-    if (pathname === '/api/live-ws') {
-      const origin = request.headers.origin;
-      const requestHost = request.headers.host;
-      let sameOrigin = false;
-      try { sameOrigin = !!origin && new URL(origin).host === requestHost; } catch { sameOrigin = false; }
-      if (origin && !sameOrigin && !allowedOrigins.includes(origin)) {
-        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-        socket.destroy();
-        return;
+    sessionPromise.then((session) => {
+      liveSession = session;
+    }).catch((err) => {
+      console.error('Failed to connect to Live API session:', err);
+      safeSend({ error: extractErrorMessage(err) });
+      if (!isClosed) {
+        isClosed = true;
+        try { clientWs.close(); } catch {}
       }
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
-    }
-  });
+    });
 
-  wss.on('connection', (ws: WebSocket) => {
-    let liveSession: any = null;
-    let isClosed = false;
-    let authenticatedUid: string | null = null;
-    let authTimeout: NodeJS.Timeout | null = setTimeout(() => ws.close(4401, 'Authentication timeout'), 6000);
-
-    ws.on('message', async (data) => {
+    clientWs.on('message', async (data) => {
       try {
         const payload = JSON.parse(data.toString());
+        const session = liveSession || (await sessionPromise);
+        if (!session) return;
 
-        if (!authenticatedUid) {
-          if (payload.type !== 'authenticate' || typeof payload.token !== 'string' || payload.token.length > 10000) {
-            ws.close(4401, 'Authentication required');
-            return;
-          }
-          try {
-            const decoded = await adminAuth.verifyIdToken(payload.token);
-            authenticatedUid = decoded.uid;
-            if (authTimeout) clearTimeout(authTimeout);
-            authTimeout = null;
-
-            // If user already had a previous active socket, close it gracefully to allow new connection
-            const existing = activeUserSessions.get(authenticatedUid);
-            if (existing && existing.ws !== ws) {
-              try {
-                if (existing.liveSession) existing.liveSession.close();
-                existing.ws.close(1000, 'Replaced by new live session');
-              } catch {}
-            }
-            activeUserSessions.set(authenticatedUid, { ws, liveSession: null });
-
-            ws.send(JSON.stringify({ type: 'authenticated' }));
-          } catch (authErr: any) {
-            console.warn("WebSocket token verification failed:", authErr?.message || authErr);
-            ws.close(4401, 'Invalid authentication');
-          }
-          return;
-        }
-
-        if (payload.type === 'start') {
-          if (liveSession) return;
-          const apiKey = getApiKey();
-          if (!apiKey) {
-            ws.send(JSON.stringify({
-              type: 'session_error',
-              error: 'API_KEY_NOT_FOUND',
-              message: 'Chave GEMINI_API_KEY não configurada no servidor.',
-            }));
-            return;
-          }
-
-          const ai = new GoogleGenAI({ apiKey });
-
-          // Official Gemini Live API model per guidelines
-          const liveModel = payload.model || 'gemini-3.8-live';
-          const voiceModel = payload.voiceModel || 'Zephyr';
-          const systemInstruction = payload.systemInstruction || '';
-
-          liveSession = await ai.live.connect({
-            model: liveModel,
-            config: {
-              responseModalities: [Modality.AUDIO],
-              inputAudioTranscription: {},
-              outputAudioTranscription: {},
-              systemInstruction: systemInstruction,
-              speechConfig: {
-                voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceModel } },
-              },
-            },
-            callbacks: {
-              onopen: () => {
-                if (!isClosed && ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ type: 'session_open' }));
-                }
-              },
-              onmessage: (message: any) => {
-                if (!isClosed && ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ type: 'server_message', message }));
-                }
-              },
-              onclose: (e: any) => {
-                if (!isClosed && ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ type: 'session_close', details: e }));
-                }
-              },
-              onerror: (err: any) => {
-                console.warn("Live session error from Gemini:", err?.message || err);
-                if (!isClosed && ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({
-                    type: 'session_error',
-                    error: err?.message || String(err),
-                  }));
-                }
-              },
+        if (payload.audio) {
+          session.sendRealtimeInput({
+            audio: {
+              data: payload.audio,
+              mimeType: 'audio/pcm;rate=16000',
             },
           });
-
-          if (authenticatedUid && activeUserSessions.has(authenticatedUid)) {
-            activeUserSessions.set(authenticatedUid, { ws, liveSession });
-          }
-        } else if (payload.type === 'realtime_input' && liveSession) {
-          if (payload.input && typeof payload.input === 'object') liveSession.sendRealtimeInput(payload.input);
-        } else if (payload.type === 'stop') {
-          if (liveSession) {
-            try {
-              liveSession.close();
-            } catch (e) {
-              console.debug("Live session close error:", e);
-            }
-            liveSession = null;
-          }
+        } else if (payload.video) {
+          session.sendRealtimeInput({
+            video: {
+              data: payload.video,
+              mimeType: 'image/jpeg',
+            },
+          });
+        } else if (payload.text) {
+          session.sendRealtimeInput({
+            text: payload.text,
+          });
         }
-      } catch (err: any) {
-        console.error("Error processing WebSocket message on server:", err);
-        if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'Message processing failed');
+      } catch (err) {
+        console.error('Error handling message from client in Live session:', err);
       }
     });
 
-    const cleanup = () => {
+    clientWs.on('close', () => {
       isClosed = true;
-      if (authTimeout) clearTimeout(authTimeout);
-      if (authenticatedUid) {
-        const cur = activeUserSessions.get(authenticatedUid);
-        if (cur?.ws === ws) {
-          activeUserSessions.delete(authenticatedUid);
-        }
-      }
       if (liveSession) {
         try {
           liveSession.close();
         } catch (e) {
-          console.debug("Error closing session on socket close:", e);
+          console.debug('Error closing Live session:', e);
         }
-        liveSession = null;
+      } else {
+        sessionPromise.then(s => {
+          try { s.close(); } catch {}
+        }).catch(() => {});
       }
-    };
+    });
 
-    ws.on('close', cleanup);
-    ws.on('error', cleanup);
-  });
+    clientWs.on('error', (err) => {
+      console.error('Client WebSocket error:', err);
+      isClosed = true;
+      if (liveSession) {
+        try { liveSession.close(); } catch {}
+      }
+    });
 
-  // Development: Mount Vite Middlewares
-  if (!process.env.VERCEL && process.env.NODE_ENV !== 'production') {
+  } catch (error: any) {
+    console.error('Error establishing Live API connection:', error);
+    safeSend({ error: extractErrorMessage(error) });
+    if (!isClosed) {
+      isClosed = true;
+      try { clientWs.close(); } catch {}
+    }
+  }
+});
+
+async function startServer() {
+  const isProd = process.env.NODE_ENV === 'production';
+
+  if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -471,25 +437,15 @@ async function createServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Production: Serve built assets
-    const distPath = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('/{*splat}', (req, res) => {
-      res.sendFile(path.resolve(distPath, 'index.html'));
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   }
 
-  // Vercel imports this HTTP server as a Function entrypoint. Locally, keep
-  // the standalone Express server for the existing npm run dev workflow.
-  if (!process.env.VERCEL) {
-    const PORT = parseInt(process.env.PORT || '3000', 10);
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running at http://0.0.0.0:${PORT}`);
-    });
-  }
-
-  return server;
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server listening on http://0.0.0.0:${PORT}`);
+  });
 }
 
-const server = await createServer();
-export default server;
+startServer();
