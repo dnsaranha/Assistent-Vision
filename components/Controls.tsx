@@ -54,7 +54,7 @@ export const Controls: React.FC<ControlsProps> = ({
   };
 
   return (
-    <div className="p-2 md:p-3 bg-gray-800/60 border-t border-gray-700/80">
+    <div className="p-2 md:p-3 bg-gray-800/60 border-t border-gray-700/80 flex-shrink-0">
       <div className="flex items-center space-x-1 sm:space-x-2">
         {/* Camera Toggle Button (Google Meet style for Mobile & Webcam) */}
         <button

@@ -3,7 +3,7 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { GoogleGenAI, LiveServerMessage, Modality, Type, Part } from '@google/genai';
+import { GoogleGenAI, LiveServerMessage, Modality, Type, Part, FunctionDeclaration } from '@google/genai';
 
 // Attempt to load .env file if available
 try {
@@ -100,20 +100,41 @@ const responseSchema = {
     },
     visual_guides: {
       type: Type.ARRAY,
-      description: "An optional list of visual guides to draw on the screen to help the user, such as arrows, text labels, or numbered steps.",
+      description: "Lista de elementos visuais para a IA desenhar e escrever na tela (setas, retângulos, círculos, textos, marcações, números de passos).",
       items: {
         type: Type.OBJECT,
         properties: {
-          type: { type: Type.STRING, description: "The type of guide ('arrow', 'text', 'number_badge')." },
-          startX: { type: Type.NUMBER, description: "For 'arrow' type: The normalized starting x-coordinate." },
-          startY: { type: Type.NUMBER, description: "For 'arrow' type: The normalized starting y-coordinate." },
-          endX: { type: Type.NUMBER, description: "For 'arrow' type: The normalized ending x-coordinate." },
-          endY: { type: Type.NUMBER, description: "For 'arrow' type: The normalized ending y-coordinate." },
-          label: { type: Type.STRING, description: "For 'arrow' type: An optional text label for the arrow." },
-          x: { type: Type.NUMBER, description: "For 'text' or 'number_badge' types: The normalized x-coordinate of the guide." },
-          y: { type: Type.NUMBER, description: "For 'text' or 'number_badge' types: The normalized y-coordinate of the guide." },
-          text: { type: Type.STRING, description: "For 'text' type: The text content of the label." },
-          number: { type: Type.INTEGER, description: "For 'number_badge' type: The number for the badge." },
+          type: { 
+            type: Type.STRING, 
+            description: "Tipo de guia: 'arrow', 'rectangle', 'circle', 'text', 'number_badge', 'line', 'highlight'" 
+          },
+          // Setas e Linhas
+          startX: { type: Type.NUMBER, description: "Coordenada X inicial normalizada (0.0 a 1.0) para setas e linhas" },
+          startY: { type: Type.NUMBER, description: "Coordenada Y inicial normalizada (0.0 a 1.0) para setas e linhas" },
+          endX: { type: Type.NUMBER, description: "Coordenada X final normalizada (0.0 a 1.0) para setas e linhas" },
+          endY: { type: Type.NUMBER, description: "Coordenada Y final normalizada (0.0 a 1.0) para setas e linhas" },
+          label: { type: Type.STRING, description: "Rótulo descritivo do elemento ou seta" },
+          // Retângulos, Textos e Destaques
+          x: { type: Type.NUMBER, description: "Coordenada X normalizada (0.0 a 1.0)" },
+          y: { type: Type.NUMBER, description: "Coordenada Y normalizada (0.0 a 1.0)" },
+          width: { type: Type.NUMBER, description: "Largura normalizada (0.0 a 1.0)" },
+          height: { type: Type.NUMBER, description: "Altura normalizada (0.0 a 1.0)" },
+          // Círculos
+          centerX: { type: Type.NUMBER, description: "Centro X do círculo normalizado (0.0 a 1.0)" },
+          centerY: { type: Type.NUMBER, description: "Centro Y do círculo normalizado (0.0 a 1.0)" },
+          radiusX: { type: Type.NUMBER, description: "Raio X normalizado (0.01 a 0.5)" },
+          radiusY: { type: Type.NUMBER, description: "Raio Y normalizado (opcional para elipses)" },
+          // Textos
+          text: { type: Type.STRING, description: "Texto a escrever diretamente na tela" },
+          // Passo a passo guiado (Number Badges)
+          number: { type: Type.INTEGER, description: "Número sequencial da etapa (1, 2, 3...) para o passo a passo guiado" },
+          title: { type: Type.STRING, description: "Título breve da etapa (ex: 'Clique em Arquivo')" },
+          description: { type: Type.STRING, description: "Instrução detalhada da etapa" },
+          // Estilo e Cores
+          color: { type: Type.STRING, description: "Cor em hexadecimal (ex: #22d3ee, #f59e0b, #10b981, #ef4444)" },
+          style: { type: Type.STRING, description: "Estilo do traço: 'solid' ou 'dashed'" },
+          filled: { type: Type.BOOLEAN, description: "Se o retângulo/forma deve ter preenchimento translúcido" },
+          pulse: { type: Type.BOOLEAN, description: "Se o círculo/elemento deve ter efeito de pulso de atenção" },
         },
         required: ["type"],
       },
@@ -167,13 +188,50 @@ app.post('/api/gemini/ask-screen', async (req, res) => {
       },
     });
 
+function sanitizeHighlights(items: any[]): any[] {
+  if (!Array.isArray(items)) return [];
+  const results: any[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    let x = Number(item.x);
+    let y = Number(item.y);
+    let width = Number(item.width);
+    let height = Number(item.height);
+
+    if ((!Number.isFinite(x) || !Number.isFinite(y)) && Array.isArray(item.box_2d) && item.box_2d.length === 4) {
+      const [ymin, xmin, ymax, xmax] = item.box_2d.map(Number);
+      const scale = ymin > 1 || xmin > 1 || ymax > 1 || xmax > 1 ? 1000 : 1;
+      x = xmin / scale;
+      y = ymin / scale;
+      width = (xmax - xmin) / scale;
+      height = (ymax - ymin) / scale;
+    }
+
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      results.push({
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y)),
+        width: Math.max(0.005, Math.min(1, width)),
+        height: Math.max(0.005, Math.min(1, height)),
+        label: typeof item.label === 'string' ? item.label : undefined,
+      });
+    }
+  }
+  return results;
+}
+
+function sanitizeVisualGuides(items: any[]): any[] {
+  if (!Array.isArray(items)) return [];
+  return items.filter(item => item && typeof item === 'object' && typeof item.type === 'string');
+}
+
     const responseText = response.text || '';
     try {
       const parsed = JSON.parse(responseText);
       return res.json({
         text: parsed.response_text || "Desculpe, não consegui formular uma resposta.",
-        annotations: parsed.highlights || [],
-        visualGuides: parsed.visual_guides || [],
+        annotations: sanitizeHighlights(parsed.highlights),
+        visualGuides: sanitizeVisualGuides(parsed.visual_guides),
       });
     } catch {
       return res.json({
@@ -293,6 +351,60 @@ wss.on('connection', async (clientWs: WebSocket, req: http.IncomingMessage) => {
   let liveSession: any = null;
   let isClosed = false;
 
+  const drawOnScreenTool: FunctionDeclaration = {
+    name: 'draw_on_screen',
+    description: "Desenha e escreve na tela do usuário para orientá-lo visualmente. Use sempre que o usuário perguntar onde fica algo, pedir para circular um erro, apontar botões com setas ou solicitar um passo a passo guiado.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        visual_guides: {
+          type: Type.ARRAY,
+          description: "Lista de elementos visuais a desenhar com coordenadas normalizadas de 0.0 a 1.0",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING, description: "Tipo de guia: 'arrow', 'rectangle', 'circle', 'text', 'number_badge', 'line', 'highlight'" },
+              startX: { type: Type.NUMBER, description: "X inicial normalizado (0.0 a 1.0)" },
+              startY: { type: Type.NUMBER, description: "Y inicial normalizado (0.0 a 1.0)" },
+              endX: { type: Type.NUMBER, description: "X final normalizado (0.0 a 1.0)" },
+              endY: { type: Type.NUMBER, description: "Y final normalizado (0.0 a 1.0)" },
+              x: { type: Type.NUMBER, description: "X normalizado (0.0 a 1.0)" },
+              y: { type: Type.NUMBER, description: "Y normalizado (0.0 a 1.0)" },
+              width: { type: Type.NUMBER, description: "Largura normalizada (0.0 a 1.0)" },
+              height: { type: Type.NUMBER, description: "Altura normalizada (0.0 a 1.0)" },
+              centerX: { type: Type.NUMBER, description: "Centro X normalizado (0.0 a 1.0)" },
+              centerY: { type: Type.NUMBER, description: "Centro Y normalizado (0.0 a 1.0)" },
+              radiusX: { type: Type.NUMBER, description: "Raio X normalizado (0.01 a 0.5)" },
+              radiusY: { type: Type.NUMBER, description: "Raio Y normalizado" },
+              text: { type: Type.STRING, description: "Texto explicativo a escrever na tela" },
+              label: { type: Type.STRING, description: "Rótulo descritivo do elemento" },
+              number: { type: Type.INTEGER, description: "Número da etapa para 'number_badge' (1, 2, 3...)" },
+              title: { type: Type.STRING, description: "Título do passo guiado" },
+              description: { type: Type.STRING, description: "Descrição ou instrução do passo guiado" },
+              color: { type: Type.STRING, description: "Cor em hexadecimal (ex: #22d3ee, #f59e0b, #10b981, #ef4444)" },
+              style: { type: Type.STRING, description: "'solid' ou 'dashed'" },
+              filled: { type: Type.BOOLEAN, description: "Se o retângulo/forma é preenchido de forma translúcida" },
+              pulse: { type: Type.BOOLEAN, description: "Se o círculo/elemento possui animação de pulso" },
+            },
+            required: ["type"],
+          },
+        },
+      },
+      required: ["visual_guides"],
+    },
+  };
+
+  const clearDrawingsTool: FunctionDeclaration = {
+    name: 'clear_screen_drawings',
+    description: "Limpa todos os desenhos, setas e formas da tela do usuário.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        reason: { type: Type.STRING, description: "Motivo da limpeza" },
+      },
+    },
+  };
+
   try {
     const ai = getGeminiClient(key);
     const sessionPromise = ai.live.connect({
@@ -308,6 +420,7 @@ wss.on('connection', async (clientWs: WebSocket, req: http.IncomingMessage) => {
             },
           },
         },
+        tools: [{ functionDeclarations: [drawOnScreenTool, clearDrawingsTool] }],
         systemInstruction: customInstruction || undefined,
       },
       callbacks: {
@@ -332,6 +445,36 @@ wss.on('connection', async (clientWs: WebSocket, req: http.IncomingMessage) => {
           }
           if (content?.turnComplete) {
             safeSend({ turnComplete: true });
+          }
+
+          // Handle function calls to draw or clear screen in real-time
+          if (message.toolCall?.functionCalls) {
+            const responses: any[] = [];
+            for (const call of message.toolCall.functionCalls) {
+              if (call.name === 'draw_on_screen') {
+                const guides = (call.args as any)?.visual_guides || [];
+                safeSend({ visualGuides: guides });
+                responses.push({
+                  id: call.id,
+                  name: call.name,
+                  response: { success: true, count: guides.length },
+                });
+              } else if (call.name === 'clear_screen_drawings') {
+                safeSend({ visualGuides: [], clear: true });
+                responses.push({
+                  id: call.id,
+                  name: call.name,
+                  response: { success: true },
+                });
+              }
+            }
+            if (responses.length > 0 && liveSession) {
+              try {
+                liveSession.sendToolResponse({ functionResponses: responses });
+              } catch (e) {
+                console.error("Error sending tool response:", e);
+              }
+            }
           }
         },
         onclose: (e: any) => {

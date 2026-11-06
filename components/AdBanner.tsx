@@ -9,7 +9,12 @@ interface AdsConfig {
 
 export const AdBanner: React.FC = () => {
   const [config, setConfig] = useState<AdsConfig | null>(null);
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 640) {
+      return true;
+    }
+    return false;
+  });
   const insRef = useRef<HTMLModElement | null>(null);
   const adPushedRef = useRef(false);
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Message, Role } from '../types';
+import { Message, Role, VisualGuide } from '../types';
 import { decode, decodeAudioData } from '../utils/audioUtils';
 import { useAudioCues } from './useAudioCues';
 
@@ -34,6 +34,7 @@ interface UseLiveConversationProps {
   systemAudioTrack?: MediaStreamTrack;
   systemInstruction: string;
   onApiKeyError: () => void;
+  onVisualGuides?: (guides: VisualGuide[]) => void;
 }
 
 export const useLiveConversation = ({
@@ -46,6 +47,7 @@ export const useLiveConversation = ({
   systemAudioTrack,
   systemInstruction,
   onApiKeyError,
+  onVisualGuides,
 }: UseLiveConversationProps) => {
   const [isLive, setIsLive] = useState(false);
   const [micVolume, setMicVolume] = useState(0);
@@ -318,6 +320,10 @@ export const useLiveConversation = ({
             currentInputRef.current = '';
             currentOutputRef.current = '';
           }
+
+          if (message.visualGuides) {
+            onVisualGuides?.(message.visualGuides);
+          }
         } catch (err) {
           console.error("Error handling Live message:", err);
         }
@@ -356,6 +362,7 @@ export const useLiveConversation = ({
     systemAudioTrack,
     systemInstruction,
     onApiKeyError,
+    onVisualGuides,
   ]);
 
   const stopConversation = useCallback(() => {

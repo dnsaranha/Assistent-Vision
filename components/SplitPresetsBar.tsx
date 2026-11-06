@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface SplitPresetsBarProps {
-  presets: readonly [30, 50, 70, 85];
+  presets: readonly number[];
   currentRatio: number;
   isMaximized: boolean;
   onSelectPreset: (ratio: number) => void;

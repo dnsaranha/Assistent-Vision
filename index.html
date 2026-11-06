@@ -11,6 +11,17 @@
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6126430337763636" crossorigin="anonymous"></script>
 
 <style>
+  html, body, #root {
+    height: 100%;
+    max-height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+  }
   @keyframes pulse-slow {
     50% {
       opacity: .7;
@@ -34,10 +45,9 @@
     animation: fadeIn 0.25s ease-out forwards;
   }
 </style>
-<link rel="stylesheet" href="/index.css">
 </head>
-  <body class="bg-gray-900">
-    <div id="root"></div>
+  <body class="bg-gray-900 text-gray-200 antialiased overflow-hidden select-none">
+    <div id="root" class="h-full w-full overflow-hidden flex flex-col"></div>
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>

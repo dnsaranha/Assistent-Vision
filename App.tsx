@@ -12,8 +12,8 @@ import { SplitterHandle } from './components/SplitterHandle';
 import { SplitPresetsBar } from './components/SplitPresetsBar';
 import { AdBanner } from './components/AdBanner';
 
-const DEFAULT_SYSTEM_INSTRUCTION = "Você é um assistente de IA prestativo chamado Vision. Suas capacidades são: 1. Orientação Visual: Quando o usuário pedir ajuda para navegar na interface em sua tela compartilhada ou através da câmera do celular/computador, seu principal objetivo é fornecer orientação visual. Forneça uma resposta curta em `response_text` e use o array `visual_guides` para desenhar na tela. Você pode usar 'arrow' para apontar para elementos, 'text' para adicionar rótulos e 'number_badge' para indicar uma sequência de etapas. Combine esses guias para fornecer instruções claras e passo a passo. 2. Código e Resolução de Problemas: Você é um programador especialista. Ajude os usuários com seus códigos, depure problemas e ofereça soluções. 3. Assistência Geral: Ajude com uma ampla gama de tarefas. Para tarefas não visuais, retorne um array `visual_guides` vazio. Importante: Adapte seu comportamento e siga as novas diretrizes se o usuário fornecer instruções para alterar sua função durante a conversa.";
-const DEFAULT_LIVE_SYSTEM_INSTRUCTION = "Você é um assistente de IA prestativo chamado Vision. Você está em uma conversa de voz e pode ver a tela ou o que a câmera do usuário transmite em tempo real. Suas capacidades são: 1. Guia Visual: Ajude os usuários a navegar em sua tela ou no que estiverem mostrando com a câmera. 2. Programador e Solucionador de Problemas: Você é um programador especialista. Ajude com código, depuração e problemas complexos. 3. Identificador de Música: Se o usuário perguntar 'que música é essa?', analise o áudio do sistema para identificar o título da música e o artista. 4. Assistente Geral: Ajude com uma ampla gama de tarefas. 5. Adaptável e Interrompível: Você deve parar de falar imediatamente se o usuário começar a falar. Além disso, adapte seu comportamento e siga novas diretrizes se o usuário fornecer instruções para alterar sua função durante a conversa. Seja sempre conciso e prestativo.";
+const DEFAULT_SYSTEM_INSTRUCTION = "Você é um assistente de IA prestativo chamado Vision. Você tem a habilidade de desenhar e escrever diretamente na tela do usuário para orientá-lo visualmente. Suas capacidades visuais em `visual_guides` incluem: 1. Setas ('arrow'): use para apontar elementos ou botões específicos, informando startX, startY, endX, endY e rótulo explicativo. 2. Formas geométricas: use 'rectangle' (caixas envolventes), 'circle' (círculos com pulso animado), 'highlight' (destaque translúcido) e 'line' (linhas indicadoras). 3. Textos ('text'): escreva anotações e dicas explicativas flutuantes na tela. 4. Passo a passo guiado ('number_badge'): numere as etapas (1, 2, 3...) com 'title' e 'description' para criar um tour guiado interativo. Combine essas formas geométricas e setas sempre que o usuário pedir ajuda para encontrar algo, entender um erro ou navegar na interface. Forneça sempre uma resposta clara em `response_text`. Para tarefas não visuais, retorne um array `visual_guides` vazio.";
+const DEFAULT_LIVE_SYSTEM_INSTRUCTION = "Você é um assistente de IA prestativo chamado Vision em uma sessão de voz e vídeo ao vivo. Você pode ver a tela ou a câmera do usuário em tempo real. Você tem a habilidade especial de desenhar e escrever na tela do usuário usando a função `draw_on_screen`! Sempre que o usuário perguntar 'onde clico?', 'como faço isso?', 'o que é isso?' ou pedir para indicar algo, chame imediatamente `draw_on_screen` criando formas geométricas ('rectangle', 'circle'), setas ('arrow'), textos explicativos ('text') e badges com passos sequenciais ('number_badge') com título e descrição. Se o usuário pedir para limpar ou passar para outro assunto, use `clear_screen_drawings`. Seja ágil, amigável e pare de falar imediatamente se o usuário te interromper.";
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
@@ -38,13 +38,13 @@ const App: React.FC = () => {
 
   const {
     containerRef,
+    registerHandleElement,
     splitRatio,
     rawSplitRatio,
     isDragging,
     isMaximized,
     isMobile,
     presets,
-    startDragging,
     applyPreset,
     toggleMaximize,
   } = useSmoothSplitter();
@@ -113,6 +113,7 @@ const App: React.FC = () => {
     systemAudioTrack,
     systemInstruction: settings.liveSystemInstruction,
     onApiKeyError: handleApiKeyError,
+    onVisualGuides: setVisualGuides,
   });
 
   const handleNewMessage = useCallback(async (prompt: string) => {
@@ -275,7 +276,7 @@ const App: React.FC = () => {
 
   return (
     <>
-      <div className="flex h-screen w-full bg-gray-900 text-gray-200 font-sans flex-col overflow-hidden">
+      <div className="flex h-full max-h-full w-full bg-gray-900 text-gray-200 font-sans flex-col overflow-hidden select-none">
         {/* Header with Title and Presets + 1-Click Maximize/Restore */}
         <header className="bg-gray-800/60 backdrop-blur-sm border-b border-gray-700/80 px-3 py-2 md:px-4 flex flex-wrap items-center justify-between gap-2 z-10 flex-shrink-0">
           <div className="flex items-center gap-2">
@@ -314,32 +315,34 @@ const App: React.FC = () => {
           </div>
         </header>
         
-        {/* Main Resizable Workspace */}
+        {/* Main Resizable Workspace with min-h-0 min-w-0 */}
         <main
           ref={containerRef as any}
-          className="flex-1 flex flex-col md:flex-row overflow-hidden relative"
+          className={`flex-1 min-h-0 min-w-0 flex overflow-hidden relative ${
+            isMobile ? 'flex-col' : 'flex-row'
+          }`}
         >
-          {/* Transparent Overlay during dragging to prevent video or canvas from stealing pointer events */}
+          {/* Subtle cursor hint during dragging */}
           {isDragging && (
             <div
-              className={`fixed inset-0 z-50 select-none bg-transparent ${
+              className={`fixed inset-0 z-50 select-none bg-transparent pointer-events-none ${
                 isMobile ? 'cursor-row-resize' : 'cursor-col-resize'
               }`}
               style={{ touchAction: 'none' }}
             />
           )}
 
-          {/* Screen / Camera Preview Section */}
+          {/* Screen / Camera Preview Section (Exactly calc() sized) */}
           <div
-            className="flex flex-col p-2 md:p-3 overflow-hidden"
+            className="flex flex-col min-h-0 min-w-0 p-2 md:p-3 overflow-hidden flex-shrink-0"
             style={
               isMobile
                 ? {
-                    height: isMaximized ? '100%' : `${splitRatio}%`,
+                    height: isMaximized ? '100%' : `calc(${splitRatio}% - 8px)`,
                     width: '100%',
                   }
                 : {
-                    width: isMaximized ? '100%' : `${splitRatio}%`,
+                    width: isMaximized ? '100%' : `calc(${splitRatio}% - 8px)`,
                     height: '100%',
                   }
             }
@@ -356,31 +359,35 @@ const App: React.FC = () => {
               onStartCamera={handleToggleCamera}
               onToggleCamera={toggleCameraFacing}
               onUploadImage={handleUploadImage}
+              onClearVisualGuides={() => {
+                setAnnotations([]);
+                setVisualGuides([]);
+              }}
             />
           </div>
 
-          {/* Draggable Divider with touch-action: none */}
+          {/* Draggable Divider with native non-passive touch drag */}
           {!isMaximized && (
             <SplitterHandle
-              onPointerDown={startDragging}
+              registerRef={registerHandleElement}
               isDragging={isDragging}
               isMobile={isMobile}
               onDoubleClick={toggleMaximize}
             />
           )}
 
-          {/* Conversation and Controls Section */}
+          {/* Conversation and Controls Section (Exactly calc() sized) */}
           {!isMaximized && (
             <div
-              className="flex flex-col overflow-hidden"
+              className="flex flex-col min-h-0 min-w-0 overflow-hidden flex-shrink-0"
               style={
                 isMobile
                   ? {
-                      height: `${100 - splitRatio}%`,
+                      height: `calc(${100 - splitRatio}% - 8px)`,
                       width: '100%',
                     }
                   : {
-                      width: `${100 - splitRatio}%`,
+                      width: `calc(${100 - splitRatio}% - 8px)`,
                       height: '100%',
                     }
               }
